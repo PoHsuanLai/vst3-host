@@ -1,0 +1,26 @@
+[package]
+name = "vst3-host"
+version = "0.1.0"
+edition = "2021"
+description = "VST3 plugin hosting library for Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/AcaciaAudio/vst3-host"
+keywords = ["vst3", "audio", "plugin", "dsp", "host"]
+categories = ["multimedia::audio"]
+readme = "README.md"
+
+[dependencies]
+libloading = "0.8"
+thiserror = "2"
+smallvec = "1.13"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+tempfile = "3"
+winit = "0.30"
+raw-window-handle = "0.6"
+
+[[example]]
+name = "gui_test"
+path = "examples/gui_test.rs"
