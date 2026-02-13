@@ -108,17 +108,11 @@ impl ApplicationHandler for App {
                         // Extract the native view pointer
                         let parent: *mut c_void = match raw_handle {
                             #[cfg(target_os = "macos")]
-                            RawWindowHandle::AppKit(h) => {
-                                h.ns_view.as_ptr() as *mut c_void
-                            }
+                            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut c_void,
                             #[cfg(target_os = "windows")]
-                            RawWindowHandle::Win32(h) => {
-                                h.hwnd.get() as *mut c_void
-                            }
+                            RawWindowHandle::Win32(h) => h.hwnd.get() as *mut c_void,
                             #[cfg(target_os = "linux")]
-                            RawWindowHandle::Xlib(h) => {
-                                h.window as *mut c_void
-                            }
+                            RawWindowHandle::Xlib(h) => h.window as *mut c_void,
                             _ => {
                                 eprintln!("Unsupported window handle type");
                                 return;
@@ -130,9 +124,9 @@ impl ApplicationHandler for App {
                             Ok((width, height)) => {
                                 println!("Editor opened: {}x{}", width, height);
                                 // Resize window to fit editor
-                                let _ = window.request_inner_size(
-                                    winit::dpi::LogicalSize::new(width, height)
-                                );
+                                let _ = window.request_inner_size(winit::dpi::LogicalSize::new(
+                                    width, height,
+                                ));
                                 self.editor_open = true;
                             }
                             Err(e) => {

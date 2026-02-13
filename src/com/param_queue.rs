@@ -6,8 +6,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use crate::ffi::{IParamValueQueueVtable, K_RESULT_OK};
 use crate::types::{ParameterPoint, ParameterQueue};
 
-/// IParamValueQueue COM implementation.
-///
 /// Provides parameter automation points for a single parameter.
 #[repr(C)]
 pub struct ParamValueQueueImpl {
@@ -18,12 +16,10 @@ pub struct ParamValueQueueImpl {
     points: Vec<ParameterPoint>,
 }
 
-// Safety: ParamValueQueueImpl only contains thread-safe types
 unsafe impl Send for ParamValueQueueImpl {}
 unsafe impl Sync for ParamValueQueueImpl {}
 
 impl ParamValueQueueImpl {
-    /// Create from a ParameterQueue.
     pub fn from_queue(queue: &ParameterQueue) -> Box<Self> {
         Box::new(ParamValueQueueImpl {
             vtable: &PARAM_VALUE_QUEUE_VTABLE,
@@ -33,7 +29,6 @@ impl ParamValueQueueImpl {
         })
     }
 
-    /// Create an empty queue for output.
     pub fn new_empty(param_id: u32) -> Box<Self> {
         Box::new(ParamValueQueueImpl {
             vtable: &PARAM_VALUE_QUEUE_VTABLE,
@@ -43,7 +38,6 @@ impl ParamValueQueueImpl {
         })
     }
 
-    /// Convert to a ParameterQueue.
     pub fn to_queue(&self) -> ParameterQueue {
         let mut queue = ParameterQueue::new(self.param_id);
         for point in &self.points {
@@ -52,22 +46,18 @@ impl ParamValueQueueImpl {
         queue
     }
 
-    /// Get the parameter ID.
     pub fn param_id(&self) -> u32 {
         self.param_id
     }
 
-    /// Get the number of points.
     pub fn len(&self) -> usize {
         self.points.len()
     }
 
-    /// Check if empty.
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
 }
-
 
 static PARAM_VALUE_QUEUE_VTABLE: IParamValueQueueVtable = IParamValueQueueVtable {
     query_interface: param_queue_query_interface,

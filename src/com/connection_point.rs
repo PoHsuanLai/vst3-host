@@ -5,14 +5,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::Mutex;
 
+type MessageCallback = Mutex<Option<Box<dyn Fn(&[u8]) + Send + Sync>>>;
+
 use crate::ffi::{
-    IConnectionPointVtable, IMessageVtable, K_NOT_IMPLEMENTED, K_RESULT_OK,
-    IID_ICONNECTION_POINT,
+    IConnectionPointVtable, IMessageVtable, IID_ICONNECTION_POINT, K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 
-
-/// IConnectionPoint COM implementation.
-///
 /// Enables communication between processor and controller components.
 #[repr(C)]
 pub struct ConnectionPoint {
@@ -20,16 +18,13 @@ pub struct ConnectionPoint {
     vtable: *const IConnectionPointVtable,
     ref_count: AtomicU32,
     connected: Mutex<Option<*mut c_void>>,
-    /// Callback for receiving messages
-    message_callback: Mutex<Option<Box<dyn Fn(&[u8]) + Send + Sync>>>,
+    message_callback: MessageCallback,
 }
 
-// Safety: ConnectionPoint uses thread-safe types
 unsafe impl Send for ConnectionPoint {}
 unsafe impl Sync for ConnectionPoint {}
 
 impl ConnectionPoint {
-    /// Create a new connection point.
     pub fn new() -> Box<Self> {
         Box::new(ConnectionPoint {
             vtable: &CONNECTION_POINT_VTABLE,
@@ -39,7 +34,6 @@ impl ConnectionPoint {
         })
     }
 
-    /// Set a callback for receiving messages.
     pub fn set_message_callback<F>(&self, callback: F)
     where
         F: Fn(&[u8]) + Send + Sync + 'static,
@@ -47,25 +41,20 @@ impl ConnectionPoint {
         *self.message_callback.lock() = Some(Box::new(callback));
     }
 
-    /// Get a raw pointer suitable for passing to VST3 APIs.
     pub fn as_ptr(&self) -> *mut c_void {
         self as *const ConnectionPoint as *mut c_void
     }
 
-    /// Check if connected.
     pub fn is_connected(&self) -> bool {
         self.connected.lock().is_some()
     }
 
-    /// Send a message to the connected point.
-    ///
     /// # Safety
     ///
-    /// The message must be a valid IMessage pointer.
+    /// `message` must be a valid IMessage pointer.
     pub unsafe fn send_message(&self, message: *mut c_void) -> i32 {
         let connected = *self.connected.lock();
         if let Some(point) = connected {
-            // Call notify on the connected point
             let vtable = *(point as *const *const IConnectionPointVtable);
             ((*vtable).notify)(point, message)
         } else {
@@ -84,7 +73,6 @@ impl Default for ConnectionPoint {
         }
     }
 }
-
 
 static CONNECTION_POINT_VTABLE: IConnectionPointVtable = IConnectionPointVtable {
     query_interface: conn_query_interface,
@@ -127,13 +115,11 @@ unsafe extern "system" fn conn_release(this: *mut c_void) -> u32 {
 unsafe extern "system" fn conn_connect(this: *mut c_void, other: *mut c_void) -> i32 {
     let point = &*(this as *const ConnectionPoint);
 
-    // Add ref to the other point
     if !other.is_null() {
         let vtable = *(other as *const *const IConnectionPointVtable);
         ((*vtable).add_ref)(other);
     }
 
-    // Release previous connection if any
     {
         let mut connected = point.connected.lock();
         if let Some(prev) = *connected {
@@ -152,7 +138,6 @@ unsafe extern "system" fn conn_disconnect(this: *mut c_void, other: *mut c_void)
     let mut connected = point.connected.lock();
     if let Some(current) = *connected {
         if current == other || other.is_null() {
-            // Release the connection
             let vtable = *(current as *const *const IConnectionPointVtable);
             ((*vtable).release)(current);
             *connected = None;
@@ -166,16 +151,13 @@ unsafe extern "system" fn conn_disconnect(this: *mut c_void, other: *mut c_void)
 unsafe extern "system" fn conn_notify(this: *mut c_void, message: *mut c_void) -> i32 {
     let point = &*(this as *const ConnectionPoint);
 
-    // Try to get message data and invoke callback
     if !message.is_null() {
         let vtable = *(message as *const *const IMessageVtable);
         let _message_id = ((*vtable).get_message_id)(message);
 
-        // Get attributes and extract binary data if callback is set
         if let Some(ref callback) = *point.message_callback.lock() {
             let attrs = ((*vtable).get_attributes)(message);
             if !attrs.is_null() {
-                // Try to get "data" attribute
                 let data_key = c"data".as_ptr();
                 let mut data_ptr: *const c_void = std::ptr::null();
                 let mut data_size: u32 = 0;

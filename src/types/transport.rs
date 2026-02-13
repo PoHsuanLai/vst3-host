@@ -153,7 +153,8 @@ impl TransportState {
         }
 
         // Set validity flags for fields we populate
-        state |= K_PROJECT_TIME_MUSIC_VALID | K_BAR_POSITION_VALID | K_TEMPO_VALID | K_TIME_SIG_VALID;
+        state |=
+            K_PROJECT_TIME_MUSIC_VALID | K_BAR_POSITION_VALID | K_TEMPO_VALID | K_TIME_SIG_VALID;
 
         ProcessContext {
             state,

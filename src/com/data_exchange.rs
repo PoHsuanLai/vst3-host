@@ -8,20 +8,16 @@ use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 
 use crate::ffi::{
-    DataExchangeBlock, IDataExchangeHandlerVtable, K_NOT_IMPLEMENTED, K_RESULT_OK,
-    IID_IDATA_EXCHANGE_HANDLER,
+    DataExchangeBlock, IDataExchangeHandlerVtable, IID_IDATA_EXCHANGE_HANDLER, K_NOT_IMPLEMENTED,
+    K_RESULT_OK,
 };
-
 
 /// Data block received from the audio processor.
 #[derive(Debug, Clone)]
 pub struct DataBlock {
-    /// User context ID identifying the queue
     pub user_context_id: u32,
-    /// The data bytes
     pub data: Vec<u8>,
 }
-
 
 struct Queue {
     block_size: u32,
@@ -29,11 +25,8 @@ struct Queue {
     num_blocks: u32,
     #[allow(dead_code)]
     alignment: u32,
-    /// Pool of available blocks
     blocks: Vec<Vec<u8>>,
-    /// Next block ID to allocate
     next_block_id: u32,
-    /// Blocks currently locked for writing
     locked_blocks: HashMap<u32, Vec<u8>>,
 }
 
@@ -54,9 +47,6 @@ impl Queue {
     }
 }
 
-
-/// IDataExchangeHandler COM implementation.
-///
 /// Enables direct, thread-safe data transfer from audio processor to edit controller
 /// for visualization purposes (e.g., waveform displays, spectrum analyzers).
 #[repr(C)]
@@ -69,14 +59,11 @@ pub struct DataExchangeHandler {
     data_sender: Sender<DataBlock>,
 }
 
-// Safety: DataExchangeHandler uses thread-safe types
 unsafe impl Send for DataExchangeHandler {}
 unsafe impl Sync for DataExchangeHandler {}
 
 impl DataExchangeHandler {
-    /// Create a new data exchange handler.
-    ///
-    /// Returns the handler and a receiver for data blocks.
+    /// Create a new data exchange handler, returning it and a receiver for data blocks.
     pub fn new() -> (Box<Self>, Receiver<DataBlock>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let handler = Box::new(DataExchangeHandler {
@@ -89,12 +76,10 @@ impl DataExchangeHandler {
         (handler, rx)
     }
 
-    /// Get a raw pointer suitable for passing to VST3 APIs.
     pub fn as_ptr(&self) -> *mut c_void {
         self as *const DataExchangeHandler as *mut c_void
     }
 }
-
 
 static DATA_EXCHANGE_HANDLER_VTABLE: IDataExchangeHandlerVtable = IDataExchangeHandlerVtable {
     query_interface: handler_query_interface,
@@ -146,13 +131,8 @@ unsafe extern "system" fn handler_open_queue(
 ) -> i32 {
     let handler = &*(this as *const DataExchangeHandler);
 
-    // Generate queue ID
     let queue_id = handler.next_queue_id.fetch_add(1, Ordering::SeqCst);
-
-    // Create queue
     let queue = Queue::new(block_size, num_blocks, alignment);
-
-    // Store queue with user context as key
     handler.queues.lock().insert(user_context_id, queue);
 
     if !out_queue_id.is_null() {
@@ -177,17 +157,14 @@ unsafe extern "system" fn handler_lock_block(
 
     let mut queues = handler.queues.lock();
     if let Some(queue) = queues.get_mut(&queue_id) {
-        // Get a block from the pool
         if let Some(mut data) = queue.blocks.pop() {
             let block_id = queue.next_block_id;
             queue.next_block_id += 1;
 
-            // Fill in the block struct
             (*block).data = data.as_mut_ptr() as *mut c_void;
             (*block).size = queue.block_size;
             (*block).block_id = block_id;
 
-            // Store in locked blocks
             queue.locked_blocks.insert(block_id, data);
 
             return K_RESULT_OK;
@@ -207,17 +184,14 @@ unsafe extern "system" fn handler_free_block(
 
     let mut queues = handler.queues.lock();
     if let Some(queue) = queues.get_mut(&queue_id) {
-        // Get the block from locked
         if let Some(data) = queue.locked_blocks.remove(&block_id) {
             if send_to_controller != 0 {
-                // Send data to controller
                 let _ = handler.data_sender.send(DataBlock {
                     user_context_id: queue_id,
                     data: data.clone(),
                 });
             }
 
-            // Return block to pool
             queue.blocks.push(data);
 
             return K_RESULT_OK;

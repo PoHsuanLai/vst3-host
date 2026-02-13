@@ -4,7 +4,6 @@
 
 use std::ffi::c_void;
 
-
 /// Factory information returned by IPluginFactory::getFactoryInfo.
 #[repr(C)]
 #[derive(Clone)]
@@ -46,7 +45,6 @@ impl Default for PClassInfo {
         }
     }
 }
-
 
 /// Process setup information passed to IAudioProcessor::setupProcessing.
 #[repr(C)]
@@ -98,7 +96,6 @@ impl Default for BusInfo {
 }
 
 impl BusInfo {
-    /// Get the bus name as a Rust String.
     pub fn name_string(&self) -> String {
         utf16_to_string(&self.name)
     }
@@ -181,8 +178,6 @@ impl Default for ProcessContext {
     }
 }
 
-// View/Editor Structures
-
 /// View rectangle for plugin GUI dimensions.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -194,17 +189,14 @@ pub struct ViewRect {
 }
 
 impl ViewRect {
-    /// Get the width of the rectangle.
     pub fn width(&self) -> i32 {
         self.right - self.left
     }
 
-    /// Get the height of the rectangle.
     pub fn height(&self) -> i32 {
         self.bottom - self.top
     }
 }
-
 
 /// Common header for all VST3 events.
 #[repr(C)]
@@ -276,7 +268,7 @@ pub struct NoteExpressionValueEvent {
     pub value: f64,
 }
 
-/// Union-like enum for all VST3 event types.
+/// Enum for all VST3 event types.
 #[derive(Clone, Copy)]
 pub enum Vst3Event {
     NoteOn(NoteOnEvent),
@@ -287,7 +279,6 @@ pub enum Vst3Event {
 }
 
 impl Vst3Event {
-    /// Get the sample offset of this event.
     pub fn sample_offset(&self) -> i32 {
         match self {
             Vst3Event::NoteOn(e) => e.header.sample_offset,
@@ -298,7 +289,6 @@ impl Vst3Event {
         }
     }
 }
-
 
 /// VST3 parameter info flags.
 pub mod parameter_flags {
@@ -356,55 +346,44 @@ impl Default for Vst3ParameterInfo {
 }
 
 impl Vst3ParameterInfo {
-    /// Get the parameter title as a Rust String.
     pub fn title_string(&self) -> String {
         utf16_to_string(&self.title)
     }
 
-    /// Get the parameter short title as a Rust String.
     pub fn short_title_string(&self) -> String {
         utf16_to_string(&self.short_title)
     }
 
-    /// Get the parameter unit as a Rust String.
     pub fn units_string(&self) -> String {
         utf16_to_string(&self.units)
     }
 
-    /// Check if parameter can be automated.
     pub fn can_automate(&self) -> bool {
         (self.flags & parameter_flags::CAN_AUTOMATE) != 0
     }
 
-    /// Check if parameter is read-only.
     pub fn is_read_only(&self) -> bool {
         (self.flags & parameter_flags::IS_READ_ONLY) != 0
     }
 
-    /// Check if parameter is hidden.
     pub fn is_hidden(&self) -> bool {
         (self.flags & parameter_flags::IS_HIDDEN) != 0
     }
 
-    /// Check if parameter is bypass.
     pub fn is_bypass(&self) -> bool {
         (self.flags & parameter_flags::IS_BYPASS) != 0
     }
 
-    /// Check if parameter wraps around.
     pub fn is_wrap(&self) -> bool {
         (self.flags & parameter_flags::IS_WRAP) != 0
     }
 }
 
-
-/// Convert a null-terminated UTF-16 array to a Rust String.
 pub fn utf16_to_string(bytes: &[u16]) -> String {
     let end = bytes.iter().position(|&c| c == 0).unwrap_or(bytes.len());
     String::from_utf16_lossy(&bytes[..end])
 }
 
-/// Convert a null-terminated i8 array to a Rust String.
 pub fn c_str_to_string(bytes: &[i8]) -> String {
     let bytes: Vec<u8> = bytes
         .iter()

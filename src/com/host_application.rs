@@ -4,13 +4,10 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::ffi::{
-    IAttributeListVtable, IHostApplicationVtable, IMessageVtable, K_NOT_IMPLEMENTED, K_RESULT_OK,
-    IID_IATTRIBUTE_LIST, IID_IHOST_APPLICATION, IID_IMESSAGE,
+    IAttributeListVtable, IHostApplicationVtable, IMessageVtable, IID_IATTRIBUTE_LIST,
+    IID_IHOST_APPLICATION, IID_IMESSAGE, K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 
-
-/// IHostApplication COM implementation.
-///
 /// Provides host information to plugins during initialization.
 #[repr(C)]
 pub struct HostApplication {
@@ -20,12 +17,10 @@ pub struct HostApplication {
     name: [u16; 128],
 }
 
-// Safety: HostApplication only contains thread-safe types
 unsafe impl Send for HostApplication {}
 unsafe impl Sync for HostApplication {}
 
 impl HostApplication {
-    /// Create a new host application with the given name.
     pub fn new(name: &str) -> Box<Self> {
         let mut name_utf16 = [0u16; 128];
         for (i, c) in name.encode_utf16().take(127).enumerate() {
@@ -39,7 +34,6 @@ impl HostApplication {
         })
     }
 
-    /// Get a raw pointer suitable for passing to VST3 APIs.
     pub fn as_ptr(&self) -> *mut c_void {
         self as *const HostApplication as *mut c_void
     }
@@ -97,14 +91,12 @@ unsafe extern "system" fn host_app_create_instance(
     let cid_ref = &*cid;
     let iid_ref = &*iid;
 
-    // Create IMessage if requested
     if *cid_ref == IID_IMESSAGE && *iid_ref == IID_IMESSAGE {
         let message = Message::new();
         *obj = Box::into_raw(message) as *mut c_void;
         return K_RESULT_OK;
     }
 
-    // Create IAttributeList if requested
     if *cid_ref == IID_IATTRIBUTE_LIST && *iid_ref == IID_IATTRIBUTE_LIST {
         let attrs = AttributeList::new();
         *obj = Box::into_raw(attrs) as *mut c_void;
@@ -115,8 +107,7 @@ unsafe extern "system" fn host_app_create_instance(
     K_NOT_IMPLEMENTED
 }
 
-
-/// IMessage COM implementation.
+/// IMessage implementation for processor/controller communication.
 #[repr(C)]
 pub struct Message {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -130,7 +121,6 @@ unsafe impl Send for Message {}
 unsafe impl Sync for Message {}
 
 impl Message {
-    /// Create a new empty message.
     pub fn new() -> Box<Self> {
         Box::new(Message {
             vtable: &MESSAGE_VTABLE,
@@ -214,12 +204,10 @@ unsafe extern "system" fn message_get_attributes(this: *mut c_void) -> *mut c_vo
     &*msg.attributes as *const AttributeList as *mut c_void
 }
 
-
-use std::collections::HashMap;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 
-/// Attribute value storage.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum AttributeValue {
     Int(i64),
     Float(f64),
@@ -227,7 +215,7 @@ enum AttributeValue {
     Binary(Vec<u8>),
 }
 
-/// IAttributeList COM implementation.
+/// IAttributeList implementation for key-value attribute storage.
 #[repr(C)]
 pub struct AttributeList {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -240,13 +228,16 @@ unsafe impl Send for AttributeList {}
 unsafe impl Sync for AttributeList {}
 
 impl AttributeList {
-    /// Create a new empty attribute list.
     pub fn new() -> Box<Self> {
         Box::new(AttributeList {
             vtable: &ATTRIBUTE_LIST_VTABLE,
             ref_count: AtomicU32::new(1),
             attributes: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn as_ptr(&mut self) -> *mut c_void {
+        self as *mut AttributeList as *mut c_void
     }
 }
 
@@ -316,7 +307,10 @@ fn key_from_ptr(key: *const i8) -> Option<String> {
 unsafe extern "system" fn attr_set_int(this: *mut c_void, key: *const i8, value: i64) -> i32 {
     let attrs = &*(this as *const AttributeList);
     if let Some(k) = key_from_ptr(key) {
-        attrs.attributes.lock().insert(k, AttributeValue::Int(value));
+        attrs
+            .attributes
+            .lock()
+            .insert(k, AttributeValue::Int(value));
         K_RESULT_OK
     } else {
         K_NOT_IMPLEMENTED
@@ -347,7 +341,11 @@ unsafe extern "system" fn attr_set_float(this: *mut c_void, key: *const i8, valu
     }
 }
 
-unsafe extern "system" fn attr_get_float(this: *mut c_void, key: *const i8, value: *mut f64) -> i32 {
+unsafe extern "system" fn attr_get_float(
+    this: *mut c_void,
+    key: *const i8,
+    value: *mut f64,
+) -> i32 {
     let attrs = &*(this as *const AttributeList);
     if let Some(k) = key_from_ptr(key) {
         if let Some(AttributeValue::Float(v)) = attrs.attributes.lock().get(&k) {
@@ -365,9 +363,13 @@ unsafe extern "system" fn attr_set_string(
 ) -> i32 {
     let attrs = &*(this as *const AttributeList);
     if let Some(k) = key_from_ptr(key) {
+        if value.is_null() {
+            return K_NOT_IMPLEMENTED;
+        }
         let mut string = Vec::new();
         let mut ptr = value;
-        while !ptr.is_null() && *ptr != 0 {
+        const MAX_STRING_LEN: usize = 65536;
+        while *ptr != 0 && string.len() < MAX_STRING_LEN {
             string.push(*ptr);
             ptr = ptr.add(1);
         }
@@ -388,6 +390,9 @@ unsafe extern "system" fn attr_get_string(
     value: *mut u16,
     size: u32,
 ) -> i32 {
+    if value.is_null() || size == 0 {
+        return K_NOT_IMPLEMENTED;
+    }
     let attrs = &*(this as *const AttributeList);
     if let Some(k) = key_from_ptr(key) {
         if let Some(AttributeValue::String(v)) = attrs.attributes.lock().get(&k) {
@@ -433,4 +438,92 @@ unsafe extern "system" fn attr_get_binary(
         }
     }
     K_NOT_IMPLEMENTED
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_key(s: &str) -> std::ffi::CString {
+        std::ffi::CString::new(s).unwrap()
+    }
+
+    #[test]
+    fn test_attr_set_string_null_value() {
+        let mut attrs = AttributeList::new();
+        let ptr = attrs.as_ptr();
+        let key = make_key("test");
+        unsafe {
+            let result = attr_set_string(ptr, key.as_ptr(), std::ptr::null());
+            assert_ne!(result, K_RESULT_OK);
+        }
+    }
+
+    #[test]
+    fn test_attr_set_get_string_roundtrip() {
+        let mut attrs = AttributeList::new();
+        let ptr = attrs.as_ptr();
+        let key = make_key("name");
+
+        // UTF-16 "hello" + null terminator
+        let utf16: Vec<u16> = "hello".encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let result = attr_set_string(ptr, key.as_ptr(), utf16.as_ptr());
+            assert_eq!(result, K_RESULT_OK);
+        }
+
+        let mut out = [0u16; 32];
+        unsafe {
+            let result = attr_get_string(ptr, key.as_ptr(), out.as_mut_ptr(), out.len() as u32);
+            assert_eq!(result, K_RESULT_OK);
+            // First 5 chars should be 'h','e','l','l','o'
+            let expected: Vec<u16> = "hello".encode_utf16().collect();
+            assert_eq!(&out[..5], &expected[..]);
+        }
+    }
+
+    #[test]
+    fn test_attr_get_string_null_value() {
+        let mut attrs = AttributeList::new();
+        let ptr = attrs.as_ptr();
+        let key = make_key("test");
+        unsafe {
+            let result = attr_get_string(ptr, key.as_ptr(), std::ptr::null_mut(), 10);
+            assert_ne!(result, K_RESULT_OK);
+        }
+    }
+
+    #[test]
+    fn test_attr_get_string_zero_size() {
+        let mut attrs = AttributeList::new();
+        let ptr = attrs.as_ptr();
+        let key = make_key("test");
+        let mut out = [0u16; 1];
+        unsafe {
+            let result = attr_get_string(ptr, key.as_ptr(), out.as_mut_ptr(), 0);
+            assert_ne!(result, K_RESULT_OK);
+        }
+    }
+
+    #[test]
+    fn test_attr_set_string_max_length_cap() {
+        let mut attrs = AttributeList::new();
+        let ptr = attrs.as_ptr();
+        let key = make_key("long");
+
+        // Very long UTF-16 string without null terminator at the end
+        // but within 65536 chars it should stop at the null terminator
+        let mut utf16: Vec<u16> = vec![0x41; 100]; // 100 'A' chars
+        utf16.push(0); // null terminator
+        unsafe {
+            let result = attr_set_string(ptr, key.as_ptr(), utf16.as_ptr());
+            assert_eq!(result, K_RESULT_OK);
+        }
+        // Verify the stored string is 100 chars + null = 101
+        let stored = attrs.attributes.lock();
+        match stored.get("long") {
+            Some(AttributeValue::String(v)) => assert_eq!(v.len(), 101), // 100 chars + null
+            other => panic!("Expected String, got {:?}", other),
+        }
+    }
 }

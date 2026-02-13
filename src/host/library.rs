@@ -32,22 +32,9 @@ unsafe impl Sync for Vst3Library {}
 
 impl Vst3Library {
     /// Load a VST3 library from a bundle path.
-    ///
-    /// # Arguments
-    ///
-    /// * `bundle_path` - Path to the `.vst3` bundle directory or library file
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let library = Vst3Library::load("/Library/Audio/Plug-Ins/VST3/MyPlugin.vst3")?;
-    /// println!("Found {} plugin classes", library.count_classes());
-    /// ```
     pub fn load(bundle_path: &Path) -> Result<Arc<Self>> {
-        // Locate the actual library file within the bundle
         let lib_path = find_library_path(bundle_path)?;
 
-        // Load the shared library
         let library = unsafe {
             Library::new(&lib_path).map_err(|e| Vst3Error::LoadFailed {
                 path: lib_path.clone(),
@@ -56,7 +43,6 @@ impl Vst3Library {
             })?
         };
 
-        // Get the factory function
         let get_factory: libloading::Symbol<GetPluginFactoryFn> = unsafe {
             library
                 .get(b"GetPluginFactory\0")
@@ -67,7 +53,6 @@ impl Vst3Library {
                 })?
         };
 
-        // Call the factory function
         let factory = unsafe { get_factory() };
         if factory.is_null() {
             return Err(Vst3Error::LoadFailed {
@@ -77,7 +62,6 @@ impl Vst3Library {
             });
         }
 
-        // Get vtable from the factory object (first pointer is vtable)
         let vtable = unsafe { *(factory as *const *const IPluginFactoryVtable) };
 
         Ok(Arc::new(Self {
@@ -87,7 +71,6 @@ impl Vst3Library {
         }))
     }
 
-    /// Get factory information (vendor, URL, email).
     pub fn get_factory_info(&self) -> Option<FactoryInfo> {
         let mut info = PFactoryInfo::default();
         let result = unsafe { ((*self.vtable).get_factory_info)(self.factory, &mut info) };
@@ -102,12 +85,10 @@ impl Vst3Library {
         }
     }
 
-    /// Get the number of plugin classes in this library.
     pub fn count_classes(&self) -> i32 {
         unsafe { ((*self.vtable).count_classes)(self.factory) }
     }
 
-    /// Get information about a plugin class at the given index.
     pub fn get_class_info(&self, index: i32) -> Result<ClassInfo> {
         let mut info = PClassInfo::default();
         let result = unsafe { ((*self.vtable).get_class_info)(self.factory, index, &mut info) };
@@ -144,31 +125,22 @@ impl Vst3Library {
 
 impl Drop for Vst3Library {
     fn drop(&mut self) {
-        // Release the factory
         unsafe {
             ((*self.vtable).release)(self.factory);
         }
     }
 }
 
-/// Factory information from a VST3 library.
 #[derive(Debug, Clone)]
 pub struct FactoryInfo {
-    /// Plugin vendor name.
     pub vendor: String,
-    /// Vendor URL.
     pub url: String,
-    /// Vendor email.
     pub email: String,
 }
 
-/// Information about a plugin class.
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
-    /// Class ID (GUID).
     pub cid: [u8; 16],
-    /// Category (e.g., "Audio Module Class").
     pub category: String,
-    /// Class name.
     pub name: String,
 }

@@ -8,9 +8,7 @@ use crate::types::ParameterChanges;
 
 use super::param_queue::ParamValueQueueImpl;
 
-/// IParameterChanges COM implementation.
-///
-/// Provides a collection of parameter automation queues.
+/// Provides a collection of parameter automation queues to the plugin.
 #[repr(C)]
 pub struct ParameterChangesImpl {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -20,12 +18,10 @@ pub struct ParameterChangesImpl {
     queues: Vec<Box<ParamValueQueueImpl>>,
 }
 
-// Safety: ParameterChangesImpl only contains thread-safe types
 unsafe impl Send for ParameterChangesImpl {}
 unsafe impl Sync for ParameterChangesImpl {}
 
 impl ParameterChangesImpl {
-    /// Create from a ParameterChanges.
     pub fn from_changes(changes: &ParameterChanges) -> Box<Self> {
         let queues: Vec<Box<ParamValueQueueImpl>> = changes
             .queues
@@ -40,7 +36,6 @@ impl ParameterChangesImpl {
         })
     }
 
-    /// Create an empty instance for output.
     pub fn new_empty() -> Box<Self> {
         Box::new(ParameterChangesImpl {
             vtable: &PARAMETER_CHANGES_VTABLE,
@@ -49,7 +44,6 @@ impl ParameterChangesImpl {
         })
     }
 
-    /// Convert to a ParameterChanges.
     pub fn to_changes(&self) -> ParameterChanges {
         let mut changes = ParameterChanges::new();
         for queue in &self.queues {
@@ -61,22 +55,18 @@ impl ParameterChangesImpl {
         changes
     }
 
-    /// Get the number of parameter queues.
     pub fn len(&self) -> usize {
         self.queues.len()
     }
 
-    /// Check if empty.
     pub fn is_empty(&self) -> bool {
         self.queues.is_empty()
     }
 
-    /// Get a raw pointer suitable for passing to VST3 APIs.
     pub fn as_ptr(&mut self) -> *mut c_void {
         self as *mut ParameterChangesImpl as *mut c_void
     }
 }
-
 
 static PARAMETER_CHANGES_VTABLE: IParameterChangesVtable = IParameterChangesVtable {
     query_interface: param_changes_query_interface,

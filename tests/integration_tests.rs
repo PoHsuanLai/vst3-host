@@ -26,10 +26,6 @@ fn find_available_plugin() -> Option<&'static str> {
     None
 }
 
-// =============================================================================
-// Plugin Loading Tests
-// =============================================================================
-
 #[test]
 #[ignore]
 fn test_load_tal_noisemaker() {
@@ -73,10 +69,6 @@ fn test_load_any_available_plugin() {
     println!("Successfully loaded: {} by {}", info.name, info.vendor);
 }
 
-// =============================================================================
-// Audio Processing Tests
-// =============================================================================
-
 #[test]
 #[ignore]
 fn test_process_silence() {
@@ -88,7 +80,8 @@ fn test_process_silence() {
         }
     };
 
-    let mut plugin = Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
+    let mut plugin =
+        Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
     // Create stereo buffers
     let input_left = vec![0.0f32; 512];
@@ -105,7 +98,6 @@ fn test_process_silence() {
     let transport = TransportState::new().tempo(120.0).playing(true);
     let midi: [MidiEvent; 0] = [];
 
-    // Process silence - returns output MIDI events
     let _output_events = plugin.process(&mut buffer, &midi, None, &[], &transport);
     println!("Processing completed successfully");
 }
@@ -121,7 +113,8 @@ fn test_process_with_midi() {
         }
     };
 
-    let mut plugin = Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
+    let mut plugin =
+        Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
     // Create stereo buffers
     let input_left = vec![0.0f32; 512];
@@ -137,13 +130,11 @@ fn test_process_with_midi() {
     let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 512, 44100.0);
     let transport = TransportState::new().tempo(120.0).playing(true);
 
-    // Send note on
     let midi = [MidiEvent::note_on(0, 0, 60, 0.8)];
 
     let _output_events = plugin.process(&mut buffer, &midi, None, &[], &transport);
 
-    // Check if plugin produced any output (synths should produce sound)
-    // Need to drop buffer first to release borrow
+    // Drop buffer first to release borrow on output slices
     drop(buffer);
     let has_output = output_left.iter().any(|&s| s.abs() > 0.0001);
     println!("Plugin produced audio: {}", has_output);
@@ -160,9 +151,9 @@ fn test_process_multiple_buffers() {
         }
     };
 
-    let mut plugin = Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
+    let mut plugin =
+        Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
-    // Process multiple buffers
     for i in 0..10 {
         let input_left = vec![0.0f32; 256];
         let input_right = vec![0.0f32; 256];
@@ -190,10 +181,6 @@ fn test_process_multiple_buffers() {
     println!("Processed 10 buffers successfully");
 }
 
-// =============================================================================
-// State Save/Load Tests
-// =============================================================================
-
 #[test]
 #[ignore]
 fn test_state_save_load() {
@@ -205,16 +192,15 @@ fn test_state_save_load() {
         }
     };
 
-    let mut plugin = Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
+    let mut plugin =
+        Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
-    // Save state
     let state = plugin.get_state();
     match state {
         Ok(data) => {
             println!("Saved state: {} bytes", data.len());
             assert!(!data.is_empty(), "State should not be empty");
 
-            // Load state back
             let result = plugin.set_state(&data);
             assert!(result.is_ok(), "Loading state should succeed");
         }
@@ -223,10 +209,6 @@ fn test_state_save_load() {
         }
     }
 }
-
-// =============================================================================
-// Parameter Tests
-// =============================================================================
 
 #[test]
 #[ignore]
@@ -244,7 +226,6 @@ fn test_get_parameters() {
     let param_count = plugin.get_parameter_count();
     println!("Plugin has {} parameters", param_count);
 
-    // Print first 10 parameters
     for i in 0..param_count.min(10) {
         let value = plugin.get_parameter(i as u32);
         println!("  [{}] value: {}", i, value);
@@ -262,9 +243,9 @@ fn test_set_parameter() {
         }
     };
 
-    let mut plugin = Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
+    let mut plugin =
+        Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
-    // Try to set the first parameter if available
     if plugin.get_parameter_count() > 0 {
         println!("Setting parameter 0 to 0.5");
         plugin.set_parameter(0, 0.5);
@@ -272,10 +253,6 @@ fn test_set_parameter() {
         println!("Read back value: {}", value);
     }
 }
-
-// =============================================================================
-// Stress Tests
-// =============================================================================
 
 #[test]
 #[ignore]
@@ -288,13 +265,12 @@ fn test_rapid_process_calls() {
         }
     };
 
-    let mut plugin = Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
+    let mut plugin =
+        Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
     let transport = TransportState::new().tempo(120.0).playing(true);
     let midi: [MidiEvent; 0] = [];
 
-    // Simulate real-time processing: 44100 / 64 ≈ 689 buffers per second
-    // Process 1 second of audio
     let start = std::time::Instant::now();
     for _ in 0..689 {
         let input_left = vec![0.0f32; 64];

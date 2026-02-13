@@ -5,7 +5,6 @@ use std::ffi::c_void;
 /// Function signature for VST3 module entry point.
 pub type GetPluginFactoryFn = unsafe extern "system" fn() -> *mut c_void;
 
-
 /// Operation succeeded.
 pub const K_RESULT_OK: i32 = 0;
 /// Operation succeeded (alias for K_RESULT_OK).
@@ -23,12 +22,10 @@ pub const K_NOT_INITIALIZED: i32 = 5;
 /// Already initialized.
 pub const K_OUT_OF_MEMORY: i32 = 6;
 
-
 /// 32-bit float samples.
 pub const K_SAMPLE_32: i32 = 0;
 /// 64-bit double samples.
 pub const K_SAMPLE_64: i32 = 1;
-
 
 /// Real-time processing mode.
 pub const K_REALTIME: i32 = 0;
@@ -37,18 +34,15 @@ pub const K_PREFETCH: i32 = 1;
 /// Offline processing mode.
 pub const K_OFFLINE: i32 = 2;
 
-
 /// Audio media type.
 pub const K_AUDIO: i32 = 0;
 /// Event (MIDI) media type.
 pub const K_EVENT: i32 = 1;
 
-
 /// Input bus direction.
 pub const K_INPUT: i32 = 0;
 /// Output bus direction.
 pub const K_OUTPUT: i32 = 1;
-
 
 /// Note on event.
 pub const K_NOTE_ON_EVENT: u16 = 0;
@@ -68,7 +62,6 @@ pub const K_CHORD_EVENT: u16 = 6;
 pub const K_SCALE_EVENT: u16 = 7;
 /// Legacy MIDI CC output event.
 pub const K_LEGACY_MIDI_CC_OUT_EVENT: u16 = 65535;
-
 
 /// Transport is playing.
 pub const K_PLAYING: u32 = 1 << 1;
@@ -96,7 +89,6 @@ pub const K_CLOCK_VALID: u32 = 1 << 15;
 pub const K_CONT_TIME_VALID: u32 = 1 << 17;
 /// Chord information is valid.
 pub const K_CHORD_VALID: u32 = 1 << 18;
-
 
 /// Volume expression (0.0 = -oo dB, 0.5 = 0dB, 1.0 = +6dB).
 pub const K_VOLUME_TYPE_ID: u32 = 0;
@@ -134,14 +126,12 @@ pub const K_ROUTING_INFO_CHANGED: i32 = 1 << 9;
 /// Keyswitches have changed.
 pub const K_KEYSWITCHES_CHANGED: i32 = 1 << 10;
 
-
 /// Seek from beginning.
 pub const K_IB_SEEK_SET: i32 = 0;
 /// Seek from current position.
 pub const K_IB_SEEK_CUR: i32 = 1;
 /// Seek from end.
 pub const K_IB_SEEK_END: i32 = 2;
-
 
 /// Async state restoration progress.
 pub const K_PROGRESS_ASYNC_STATE_RESTORATION: u32 = 0;

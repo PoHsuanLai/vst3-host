@@ -7,14 +7,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use parking_lot::Mutex;
 
 use crate::ffi::{
-    IBStreamVtable, K_IB_SEEK_CUR, K_IB_SEEK_END, K_IB_SEEK_SET, K_NOT_IMPLEMENTED, K_RESULT_OK,
-    IID_IBSTREAM,
+    IBStreamVtable, IID_IBSTREAM, K_IB_SEEK_CUR, K_IB_SEEK_END, K_IB_SEEK_SET, K_NOT_IMPLEMENTED,
+    K_RESULT_OK,
 };
 
-
-/// IBStream COM implementation for state serialization.
-///
-/// This wraps a byte buffer and implements the VST3 stream interface
+/// Wraps a byte buffer and implements the VST3 IBStream interface
 /// for reading/writing plugin state.
 #[repr(C)]
 pub struct BStream {
@@ -24,12 +21,10 @@ pub struct BStream {
     cursor: Mutex<Cursor<Vec<u8>>>,
 }
 
-// Safety: BStream only contains thread-safe types
 unsafe impl Send for BStream {}
 unsafe impl Sync for BStream {}
 
 impl BStream {
-    /// Create a new empty stream for writing.
     pub fn new() -> Box<Self> {
         Box::new(BStream {
             vtable: &BSTREAM_VTABLE,
@@ -38,7 +33,6 @@ impl BStream {
         })
     }
 
-    /// Create a stream from existing data for reading.
     pub fn from_data(data: Vec<u8>) -> Box<Self> {
         Box::new(BStream {
             vtable: &BSTREAM_VTABLE,
@@ -47,17 +41,14 @@ impl BStream {
         })
     }
 
-    /// Get the underlying data.
     pub fn into_data(self) -> Vec<u8> {
         self.cursor.into_inner().into_inner()
     }
 
-    /// Get a copy of the data.
     pub fn data(&self) -> Vec<u8> {
         self.cursor.lock().get_ref().clone()
     }
 
-    /// Get a raw pointer suitable for passing to VST3 APIs.
     pub fn as_ptr(&mut self) -> *mut c_void {
         self as *mut BStream as *mut c_void
     }
@@ -72,7 +63,6 @@ impl Default for BStream {
         }
     }
 }
-
 
 static BSTREAM_VTABLE: IBStreamVtable = IBStreamVtable {
     query_interface: stream_query_interface,
@@ -122,6 +112,16 @@ unsafe extern "system" fn stream_read(
     let stream = &*(this as *const BStream);
     let mut cursor = stream.cursor.lock();
 
+    if num_bytes <= 0 || buffer.is_null() {
+        if !num_bytes_read.is_null() {
+            *num_bytes_read = 0;
+        }
+        return if num_bytes == 0 {
+            K_RESULT_OK
+        } else {
+            K_NOT_IMPLEMENTED
+        };
+    }
     let buf_slice = std::slice::from_raw_parts_mut(buffer as *mut u8, num_bytes as usize);
     match cursor.read(buf_slice) {
         Ok(n) => {
@@ -143,6 +143,16 @@ unsafe extern "system" fn stream_write(
     let stream = &*(this as *const BStream);
     let mut cursor = stream.cursor.lock();
 
+    if num_bytes <= 0 || buffer.is_null() {
+        if !num_bytes_written.is_null() {
+            *num_bytes_written = 0;
+        }
+        return if num_bytes == 0 {
+            K_RESULT_OK
+        } else {
+            K_NOT_IMPLEMENTED
+        };
+    }
     let buf_slice = std::slice::from_raw_parts(buffer as *const u8, num_bytes as usize);
     match cursor.write(buf_slice) {
         Ok(n) => {
@@ -192,7 +202,6 @@ unsafe extern "system" fn stream_tell(this: *mut c_void, pos: *mut i64) -> i32 {
     K_RESULT_OK
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,8 +209,6 @@ mod tests {
     #[test]
     fn test_stream_write_read() {
         let mut stream = BStream::new();
-
-        // Write some data
         let data = b"Hello, VST3!";
         let ptr = stream.as_ptr();
         unsafe {
@@ -216,7 +223,6 @@ mod tests {
             assert_eq!(written, data.len() as i32);
         }
 
-        // Seek back to start
         unsafe {
             let mut new_pos = 0i64;
             let result = stream_seek(ptr, 0, K_IB_SEEK_SET, &mut new_pos);
@@ -224,7 +230,6 @@ mod tests {
             assert_eq!(new_pos, 0);
         }
 
-        // Read it back
         let mut buffer = [0u8; 32];
         unsafe {
             let mut bytes_read = 0i32;
@@ -245,5 +250,101 @@ mod tests {
         let data = vec![1, 2, 3, 4, 5];
         let stream = BStream::from_data(data.clone());
         assert_eq!(stream.data(), data);
+    }
+
+    #[test]
+    fn test_stream_read_negative_num_bytes() {
+        let mut stream = BStream::from_data(vec![1, 2, 3]);
+        let ptr = stream.as_ptr();
+        let mut buf = [0u8; 8];
+        let mut bytes_read = 99i32;
+        unsafe {
+            let result = stream_read(ptr, buf.as_mut_ptr() as *mut c_void, -1, &mut bytes_read);
+            assert_ne!(result, K_RESULT_OK);
+            assert_eq!(bytes_read, 0);
+        }
+    }
+
+    #[test]
+    fn test_stream_read_zero_num_bytes() {
+        let mut stream = BStream::from_data(vec![1, 2, 3]);
+        let ptr = stream.as_ptr();
+        let mut buf = [0u8; 8];
+        let mut bytes_read = 99i32;
+        unsafe {
+            let result = stream_read(ptr, buf.as_mut_ptr() as *mut c_void, 0, &mut bytes_read);
+            assert_eq!(result, K_RESULT_OK);
+            assert_eq!(bytes_read, 0);
+        }
+    }
+
+    #[test]
+    fn test_stream_read_null_buffer() {
+        let mut stream = BStream::from_data(vec![1, 2, 3]);
+        let ptr = stream.as_ptr();
+        let mut bytes_read = 99i32;
+        unsafe {
+            let result = stream_read(ptr, std::ptr::null_mut(), 10, &mut bytes_read);
+            assert_ne!(result, K_RESULT_OK);
+            assert_eq!(bytes_read, 0);
+        }
+    }
+
+    #[test]
+    fn test_stream_write_negative_num_bytes() {
+        let mut stream = BStream::new();
+        let ptr = stream.as_ptr();
+        let data = [1u8, 2, 3];
+        let mut bytes_written = 99i32;
+        unsafe {
+            let result = stream_write(ptr, data.as_ptr() as *const c_void, -5, &mut bytes_written);
+            assert_ne!(result, K_RESULT_OK);
+            assert_eq!(bytes_written, 0);
+        }
+        // Stream should still be empty
+        assert!(stream.data().is_empty());
+    }
+
+    #[test]
+    fn test_stream_write_zero_num_bytes() {
+        let mut stream = BStream::new();
+        let ptr = stream.as_ptr();
+        let data = [1u8, 2, 3];
+        let mut bytes_written = 99i32;
+        unsafe {
+            let result = stream_write(ptr, data.as_ptr() as *const c_void, 0, &mut bytes_written);
+            assert_eq!(result, K_RESULT_OK);
+            assert_eq!(bytes_written, 0);
+        }
+    }
+
+    #[test]
+    fn test_stream_write_null_buffer() {
+        let mut stream = BStream::new();
+        let ptr = stream.as_ptr();
+        let mut bytes_written = 99i32;
+        unsafe {
+            let result = stream_write(ptr, std::ptr::null(), 10, &mut bytes_written);
+            assert_ne!(result, K_RESULT_OK);
+            assert_eq!(bytes_written, 0);
+        }
+    }
+
+    #[test]
+    fn test_stream_read_null_bytes_read_pointer() {
+        let mut stream = BStream::from_data(vec![1, 2, 3]);
+        let ptr = stream.as_ptr();
+        let mut buf = [0u8; 8];
+        unsafe {
+            // null num_bytes_read pointer should not crash
+            let result = stream_read(
+                ptr,
+                buf.as_mut_ptr() as *mut c_void,
+                3,
+                std::ptr::null_mut(),
+            );
+            assert_eq!(result, K_RESULT_OK);
+            assert_eq!(&buf[..3], &[1, 2, 3]);
+        }
     }
 }

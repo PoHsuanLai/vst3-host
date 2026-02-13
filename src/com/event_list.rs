@@ -13,17 +13,10 @@ use crate::types::{
 
 use smallvec::SmallVec;
 
-/// IEventList COM implementation for providing MIDI events to plugins.
+/// IEventList implementation for providing MIDI events to plugins.
 ///
-/// This struct implements the VST3 IEventList interface, allowing the host
-/// to pass MIDI events to plugins during processing.
-///
-/// # RT-Safety
-///
-/// The event list is designed for real-time safety:
-/// - Pre-allocated vector is reused across process calls
-/// - No heap allocations during normal operation
-/// - Reference counting uses atomic operations
+/// Designed for real-time safety: pre-allocated vector is reused across
+/// process calls with no heap allocations during normal operation.
 #[repr(C)]
 pub struct EventList {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -32,12 +25,10 @@ pub struct EventList {
     events: Vec<Vst3Event>,
 }
 
-// Safety: EventList only contains thread-safe types
 unsafe impl Send for EventList {}
 unsafe impl Sync for EventList {}
 
 impl EventList {
-    /// Create a new empty event list.
     pub fn new() -> Box<Self> {
         Box::new(EventList {
             vtable: &EVENT_LIST_VTABLE,
@@ -46,62 +37,46 @@ impl EventList {
         })
     }
 
-    /// Update the event list from MIDI events.
-    ///
-    /// This method clears the existing events and populates the list
-    /// with the given MIDI events. It reuses the existing allocation.
+    /// Clear and repopulate from the given MIDI events, reusing the existing allocation.
     pub fn update_from_midi<E: Vst3MidiEvent>(&mut self, midi_events: &[E]) {
         self.events.clear();
         self.events
             .extend(midi_events.iter().filter_map(|e| e.to_vst3_event()));
     }
 
-    /// Update from MIDI events and note expressions.
-    ///
-    /// Events are sorted by sample offset after adding.
+    /// Update from MIDI events and note expressions, sorted by sample offset.
     pub fn update_from_midi_and_expression<E: Vst3MidiEvent>(
         &mut self,
         midi_events: &[E],
         note_expressions: &[NoteExpressionValue],
     ) {
         self.events.clear();
-
-        // Add MIDI events
         self.events
             .extend(midi_events.iter().filter_map(|e| e.to_vst3_event()));
-
-        // Add note expression events
         for expr in note_expressions {
             self.events.push(expr.to_vst3_event());
         }
-
-        // Sort by sample offset
         self.events.sort_by_key(|e| e.sample_offset());
     }
 
-    /// Clear all events (RT-safe: keeps allocation).
+    /// Clear all events, keeping allocation for reuse.
     pub fn clear(&mut self) {
         self.events.clear();
     }
 
-    /// Get the number of events.
     pub fn len(&self) -> usize {
         self.events.len()
     }
 
-    /// Check if the event list is empty.
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
 
-    /// Convert all events to MIDI events.
-    ///
-    /// Note expression events are skipped.
+    /// Convert all events to MIDI events (note expression events are skipped).
     pub fn to_midi_events(&self) -> SmallVec<[MidiEvent; 64]> {
         self.events.iter().filter_map(vst3_to_midi_event).collect()
     }
 
-    /// Extract note expression events.
     pub fn to_note_expressions(&self) -> SmallVec<[NoteExpressionValue; 16]> {
         self.events
             .iter()
@@ -109,7 +84,6 @@ impl EventList {
             .collect()
     }
 
-    /// Get a raw pointer suitable for passing to VST3 APIs.
     pub fn as_ptr(&mut self) -> *mut c_void {
         self as *mut EventList as *mut c_void
     }
@@ -124,7 +98,6 @@ impl Default for EventList {
         }
     }
 }
-
 
 static EVENT_LIST_VTABLE: IEventListVtable = IEventListVtable {
     query_interface: event_list_query_interface,
@@ -159,7 +132,6 @@ unsafe extern "system" fn event_list_release(this: *mut c_void) -> u32 {
     let event_list = &*(this as *const EventList);
     let count = event_list.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
     if count == 0 {
-        // Drop the box
         let _ = Box::from_raw(this as *mut EventList);
     }
     count
@@ -175,12 +147,14 @@ unsafe extern "system" fn event_list_get_event(
     index: i32,
     event: *mut c_void,
 ) -> i32 {
+    if event.is_null() {
+        return -1;
+    }
     let event_list = &*(this as *const EventList);
     if index < 0 || index >= event_list.events.len() as i32 {
         return -1;
     }
 
-    // Copy the event data to the output pointer
     match &event_list.events[index as usize] {
         Vst3Event::NoteOn(e) => {
             std::ptr::copy_nonoverlapping(
@@ -223,10 +197,10 @@ unsafe extern "system" fn event_list_get_event(
 }
 
 unsafe extern "system" fn event_list_add_event(this: *mut c_void, event: *const c_void) -> i32 {
-    // This implementation allows plugins to add output events
+    if event.is_null() {
+        return -1;
+    }
     let event_list = &mut *(this as *mut EventList);
-
-    // Read the event header to determine the type
     let header = &*(event as *const crate::ffi::EventHeader);
 
     match header.event_type {
@@ -254,4 +228,114 @@ unsafe extern "system" fn event_list_add_event(this: *mut c_void, event: *const 
     }
 
     K_RESULT_OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_note_on() -> NoteOnEvent {
+        NoteOnEvent {
+            header: crate::ffi::EventHeader {
+                bus_index: 0,
+                sample_offset: 0,
+                ppq_position: 0.0,
+                flags: 0,
+                event_type: crate::ffi::K_NOTE_ON_EVENT,
+            },
+            channel: 0,
+            pitch: 60,
+            tuning: 0.0,
+            velocity: 0.8,
+            length: 0,
+            note_id: -1,
+        }
+    }
+
+    #[test]
+    fn test_get_event_null_pointer() {
+        let mut list = EventList::new();
+        list.events.push(Vst3Event::NoteOn(make_note_on()));
+        let ptr = list.as_ptr();
+        unsafe {
+            let result = event_list_get_event(ptr, 0, std::ptr::null_mut());
+            assert_ne!(result, K_RESULT_OK);
+        }
+    }
+
+    #[test]
+    fn test_get_event_negative_index() {
+        let mut list = EventList::new();
+        list.events.push(Vst3Event::NoteOn(make_note_on()));
+        let ptr = list.as_ptr();
+        let mut buf = [0u8; 64];
+        unsafe {
+            let result = event_list_get_event(ptr, -1, buf.as_mut_ptr() as *mut c_void);
+            assert_ne!(result, K_RESULT_OK);
+        }
+    }
+
+    #[test]
+    fn test_get_event_out_of_bounds() {
+        let mut list = EventList::new();
+        list.events.push(Vst3Event::NoteOn(make_note_on()));
+        let ptr = list.as_ptr();
+        let mut buf = [0u8; 64];
+        unsafe {
+            let result = event_list_get_event(ptr, 5, buf.as_mut_ptr() as *mut c_void);
+            assert_ne!(result, K_RESULT_OK);
+        }
+    }
+
+    #[test]
+    fn test_get_event_valid() {
+        let mut list = EventList::new();
+        list.events.push(Vst3Event::NoteOn(make_note_on()));
+        let ptr = list.as_ptr();
+        let mut out = std::mem::MaybeUninit::<NoteOnEvent>::uninit();
+        unsafe {
+            let result = event_list_get_event(ptr, 0, out.as_mut_ptr() as *mut c_void);
+            assert_eq!(result, K_RESULT_OK);
+            let out = out.assume_init();
+            assert_eq!(out.pitch, 60);
+            assert!((out.velocity - 0.8).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_add_event_null_pointer() {
+        let mut list = EventList::new();
+        let ptr = list.as_ptr();
+        unsafe {
+            let result = event_list_add_event(ptr, std::ptr::null());
+            assert_ne!(result, K_RESULT_OK);
+        }
+        assert!(list.events.is_empty());
+    }
+
+    #[test]
+    fn test_add_event_valid() {
+        let mut list = EventList::new();
+        let ptr = list.as_ptr();
+        let note = make_note_on();
+        unsafe {
+            let result = event_list_add_event(ptr, &note as *const NoteOnEvent as *const c_void);
+            assert_eq!(result, K_RESULT_OK);
+        }
+        assert_eq!(list.events.len(), 1);
+    }
+
+    #[test]
+    fn test_event_count() {
+        let mut list = EventList::new();
+        let ptr = list.as_ptr();
+        unsafe {
+            assert_eq!(event_list_get_event_count(ptr), 0);
+        }
+        list.events.push(Vst3Event::NoteOn(make_note_on()));
+        list.events.push(Vst3Event::NoteOn(make_note_on()));
+        unsafe {
+            assert_eq!(event_list_get_event_count(ptr), 2);
+        }
+    }
 }

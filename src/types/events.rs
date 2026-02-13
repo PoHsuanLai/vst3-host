@@ -1,9 +1,9 @@
 //! MIDI event types for VST3 plugin processing.
 
 use crate::ffi::{
-    DataEvent, EventHeader, NoteOffEvent, NoteOnEvent, PolyPressureEvent, Vst3Event,
-    K_DATA_EVENT, K_NOTE_EXPRESSION_VALUE_EVENT, K_NOTE_OFF_EVENT, K_NOTE_ON_EVENT,
-    K_POLY_PRESSURE_EVENT, NoteExpressionValueEvent,
+    DataEvent, EventHeader, NoteExpressionValueEvent, NoteOffEvent, NoteOnEvent, PolyPressureEvent,
+    Vst3Event, K_DATA_EVENT, K_NOTE_EXPRESSION_VALUE_EVENT, K_NOTE_OFF_EVENT, K_NOTE_ON_EVENT,
+    K_POLY_PRESSURE_EVENT,
 };
 
 /// Trait for types that can be converted to VST3 events.
@@ -256,7 +256,6 @@ pub enum MidiData {
         value: u16,
     },
 }
-
 
 /// Note expression type for per-note modulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

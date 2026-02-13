@@ -5,8 +5,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::ffi::{IProgressVtable, K_RESULT_OK, IID_IPROGRESS, K_NOT_IMPLEMENTED};
-
+use crate::ffi::{IProgressVtable, IID_IPROGRESS, K_NOT_IMPLEMENTED, K_RESULT_OK};
 
 /// Progress event from the plugin.
 #[derive(Debug, Clone)]
@@ -23,9 +22,6 @@ pub enum ProgressEvent {
     Finished { id: u64 },
 }
 
-
-/// IProgress COM implementation.
-///
 /// Handles progress reporting from plugins during long operations.
 #[repr(C)]
 pub struct ProgressHandler {
@@ -36,14 +32,11 @@ pub struct ProgressHandler {
     event_sender: Sender<ProgressEvent>,
 }
 
-// Safety: ProgressHandler only contains thread-safe types
 unsafe impl Send for ProgressHandler {}
 unsafe impl Sync for ProgressHandler {}
 
 impl ProgressHandler {
-    /// Create a new progress handler.
-    ///
-    /// Returns the handler and a receiver for progress events.
+    /// Create a new progress handler, returning it and a receiver for progress events.
     pub fn new() -> (Box<Self>, Receiver<ProgressEvent>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let handler = Box::new(ProgressHandler {
@@ -55,12 +48,10 @@ impl ProgressHandler {
         (handler, rx)
     }
 
-    /// Get a raw pointer suitable for passing to VST3 APIs.
     pub fn as_ptr(&self) -> *mut c_void {
         self as *const ProgressHandler as *mut c_void
     }
 }
-
 
 static PROGRESS_VTABLE: IProgressVtable = IProgressVtable {
     query_interface: progress_query_interface,
@@ -108,10 +99,8 @@ unsafe extern "system" fn progress_start(
 ) -> i32 {
     let handler = &*(this as *const ProgressHandler);
 
-    // Generate new ID
     let id = handler.next_id.fetch_add(1, Ordering::SeqCst);
 
-    // Convert description from UTF-16
     let desc = if description.is_null() {
         String::new()
     } else {
@@ -124,14 +113,12 @@ unsafe extern "system" fn progress_start(
         String::from_utf16_lossy(&chars)
     };
 
-    // Send event
     let _ = handler.event_sender.send(ProgressEvent::Started {
         id,
         progress_type,
         description: desc,
     });
 
-    // Return ID
     if !out_id.is_null() {
         *out_id = id;
     }
@@ -141,7 +128,9 @@ unsafe extern "system" fn progress_start(
 
 unsafe extern "system" fn progress_update(this: *mut c_void, id: u64, progress: f64) -> i32 {
     let handler = &*(this as *const ProgressHandler);
-    let _ = handler.event_sender.send(ProgressEvent::Updated { id, progress });
+    let _ = handler
+        .event_sender
+        .send(ProgressEvent::Updated { id, progress });
     K_RESULT_OK
 }
 

@@ -53,7 +53,6 @@ pub mod ffi;
 pub mod host;
 pub mod types;
 
-// Re-export main types for convenience
 pub use error::{LoadStage, Result, Vst3Error};
 pub use ffi::{parameter_flags, BusInfo, Vst3ParameterInfo};
 pub use host::{Vst3Instance, Vst3Library};
@@ -62,5 +61,4 @@ pub use types::{
     ParameterPoint, ParameterQueue, PluginInfo, Sample, TransportState, Vst3MidiEvent,
 };
 
-// Re-export commonly used COM types for host integration
 pub use com::{BStream, ComponentHandler, EventList, ParameterChangesImpl, ParameterEditEvent};
