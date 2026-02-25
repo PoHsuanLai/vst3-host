@@ -1,5 +1,9 @@
 //! High-level types over the raw FFI layer.
 
+use std::ffi::c_void;
+
+use smallvec::SmallVec;
+
 mod audio;
 mod events;
 mod params;
@@ -12,6 +16,55 @@ pub use events::{
 };
 pub use params::{ParameterChanges, ParameterPoint, ParameterQueue};
 pub use transport::TransportState;
+
+// ---------------------------------------------------------------------------
+// ProcessOutput
+// ---------------------------------------------------------------------------
+
+/// Output from a single `process()` call.
+pub struct ProcessOutput {
+    pub midi_events: SmallVec<[MidiEvent; 64]>,
+    pub parameter_changes: ParameterChanges,
+}
+
+// ---------------------------------------------------------------------------
+// EditorSize
+// ---------------------------------------------------------------------------
+
+/// Pixel dimensions of a plugin editor window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditorSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+// ---------------------------------------------------------------------------
+// WindowHandle
+// ---------------------------------------------------------------------------
+
+/// A platform-specific parent window handle for embedding plugin editors.
+///
+/// Construct via [`WindowHandle::from_raw`], then pass to
+/// [`Vst3Instance::open_editor`](crate::Vst3Instance::open_editor).
+pub struct WindowHandle(*mut c_void);
+
+impl WindowHandle {
+    /// Create a `WindowHandle` from a raw platform pointer.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be a valid window handle for the current platform:
+    /// - **macOS:** `NSView*`
+    /// - **Windows:** `HWND`
+    /// - **Linux:** X11 window ID cast to pointer
+    pub unsafe fn from_raw(ptr: *mut c_void) -> Self {
+        Self(ptr)
+    }
+
+    pub(crate) fn as_ptr(&self) -> *mut c_void {
+        self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PluginInfo {

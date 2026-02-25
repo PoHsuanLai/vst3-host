@@ -1,103 +1,164 @@
 # vst3-host
 
-A Rust library for hosting VST3 audio plugins.
+[![CI](https://github.com/AcaciaAudio/vst3-host/actions/workflows/ci.yml/badge.svg)](https://github.com/AcaciaAudio/vst3-host/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/vst3-host.svg)](https://crates.io/crates/vst3-host)
+[![docs.rs](https://img.shields.io/docsrs/vst3-host)](https://docs.rs/vst3-host)
+[![License](https://img.shields.io/crates/l/vst3-host.svg)](LICENSE-MIT)
+
+A pure-Rust library for hosting VST3 audio plugins. No C++ SDK required.
 
 ## Features
 
-### Core Hosting
-- Load VST3 plugins from `.vst3` bundles (macOS, Linux, Windows)
-- Process audio in f32 or f64 format
-- Send MIDI events to plugins (Note On/Off, CC, Pitch Bend, Aftertouch)
-- Note expression support (Volume, Pan, Tuning, Vibrato, Brightness)
-- Parameter automation with sample-accurate changes
-- Transport/tempo synchronization
+- Load `.vst3` bundles on macOS, Linux, and Windows
+- Process audio in f32 or f64
+- MIDI input/output (Note On/Off, CC, Pitch Bend, Aftertouch, Program Change)
+- Note expression (Volume, Pan, Tuning, Vibrato, Brightness)
+- Sample-accurate parameter automation
+- Transport and tempo sync
+- Plugin state save/load
+- Plugin editor (GUI) embedding
+- Chainable configuration API
 
-### Host Integration
-- **IHostApplication** - Provide host name to plugins
-- **IComponentHandler** - Receive parameter edit notifications from plugin GUI
-- **IComponentHandler2** - Grouped parameter edits for automation
-- **IComponentHandler3** - Context menu support
-- **IBStream** - VST3-compatible state serialization
+### Host Interfaces
 
-### Communication
-- **IConnectionPoint** - Processor/controller messaging
-- **IMessage/IAttributeList** - Key-value message passing
+The library implements these VST3 host interfaces, all discoverable by the plugin through `IComponentHandler::queryInterface`:
 
-### Program/Preset Management
-- **IUnitHandler** - Unit/bank selection notifications
-- **IProgramListData** - Program list persistence
+| Interface | Description |
+|-----------|-------------|
+| IComponentHandler | Parameter edit notifications from plugin GUI |
+| IComponentHandler2 | Grouped edits, dirty state, editor requests |
+| IComponentHandler3 | Context menu support |
+| IComponentHandlerBusActivation | Bus activation requests |
+| IProgress | Progress reporting for long operations (preset loading, scanning) |
+| IUnitHandler / IUnitHandler2 | Unit selection and program list change notifications |
+| IHostApplication | Host name identification |
+| IConnectionPoint | Processor ↔ controller messaging |
+| IBStream | State serialization |
 
-### Other
-- **IProgress** - Progress reporting for long operations
-- **IMidiMapping** - MIDI CC to parameter mapping
-- Cross-platform editor window support
-
-## Usage
+## Quick Start
 
 ```rust
+use std::path::Path;
 use vst3_host::{Vst3Instance, AudioBuffer, MidiEvent, TransportState};
 
-// Load a VST3 plugin (sample_rate=44100, block_size=512)
-let mut plugin = Vst3Instance::load("/path/to/plugin.vst3", 44100.0, 512)?;
+// Load a plugin
+let mut plugin = Vst3Instance::load(
+    Path::new("/Library/Audio/Plug-Ins/VST3/MyPlugin.vst3"),
+    44100.0,  // sample rate
+    512,      // block size
+)?;
 
-// Check capabilities
-println!("Name: {}", plugin.info().name);
-println!("Supports f64: {}", plugin.supports_f64());
+println!("{} by {}", plugin.info().name, plugin.info().vendor);
 
-// Prepare audio buffers
+// Set up audio buffers
 let inputs: [&[f32]; 2] = [&[0.0; 512], &[0.0; 512]];
-let mut output_left = [0.0f32; 512];
-let mut output_right = [0.0f32; 512];
-let mut outputs: [&mut [f32]; 2] = [&mut output_left, &mut output_right];
-
+let mut out_l = vec![0.0f32; 512];
+let mut out_r = vec![0.0f32; 512];
+let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
 let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 512, 44100.0);
 
-// Process with MIDI events
-let midi = vec![MidiEvent::note_on(0, 0, 60, 0.8)];
+// Process with MIDI
+let midi = [MidiEvent::note_on(0, 0, 60, 0.8)];
 let transport = TransportState::new().tempo(120.0).playing(true);
-let output_midi = plugin.process(&mut buffer, &midi, &transport);
+let output = plugin.process(&mut buffer, &midi, None, &[], &transport);
+
+// output.midi_events  — MIDI events from the plugin
+// output.parameter_changes — output parameter changes
 ```
 
-## Parameter Edit Events
-
-Receive notifications when the user interacts with the plugin GUI:
+## Chainable Configuration
 
 ```rust
-// Poll for parameter edit events from plugin GUI
+plugin
+    .set_sample_rate(48000.0)
+    .set_block_size(256);
+
+plugin.set_use_f64(true)?;
+plugin.set_state(&saved_state)?;
+```
+
+## Host Events
+
+Poll for events the plugin sends to the host:
+
+```rust
+use vst3_host::{ParameterEditEvent, ProgressEvent, UnitEvent};
+
+// Parameter edits from plugin GUI
 for event in plugin.poll_param_events() {
     match event {
-        ParameterEditEvent::BeginEdit(param_id) => {
-            println!("Started editing parameter {}", param_id);
-        }
-        ParameterEditEvent::PerformEdit { param_id, value } => {
-            println!("Parameter {} changed to {}", param_id, value);
-        }
-        ParameterEditEvent::EndEdit(param_id) => {
-            println!("Finished editing parameter {}", param_id);
-        }
+        ParameterEditEvent::PerformEdit { param_id, value } => { /* ... */ }
+        _ => {}
+    }
+}
+
+// Progress reports (e.g. preset loading)
+for event in plugin.poll_progress_events() {
+    match event {
+        ProgressEvent::Updated { id, progress } => { /* 0.0..1.0 */ }
+        _ => {}
+    }
+}
+
+// Unit/program changes
+for event in plugin.poll_unit_events() {
+    match event {
+        UnitEvent::ProgramListChanged { list_id, program_index } => { /* ... */ }
         _ => {}
     }
 }
 ```
 
-## Custom MIDI Types
+For async integration, use `param_event_receiver()`, `progress_event_receiver()`, or `unit_event_receiver()` to get a `crossbeam_channel::Receiver` directly.
 
-If you have your own MIDI event type, implement the `Vst3MidiEvent` trait:
+## Plugin Editor (GUI)
 
 ```rust
-use vst3_host::{Vst3MidiEvent, ffi::Vst3Event};
+use vst3_host::WindowHandle;
 
-impl Vst3MidiEvent for MyMidiEvent {
-    fn sample_offset(&self) -> i32 {
-        self.offset as i32
-    }
+if plugin.has_editor() {
+    // Construct a WindowHandle from your platform's native view pointer.
+    // This is the only unsafe boundary in the public API.
+    let handle = unsafe { WindowHandle::from_raw(native_view_ptr) };
+    let size = plugin.open_editor(handle)?;
+    println!("Editor size: {}x{}", size.width, size.height);
+}
+
+plugin.close_editor();
+```
+
+## Custom MIDI Types
+
+Implement `Vst3MidiEvent` to pass your own event types directly to `process()`:
+
+```rust
+use vst3_host::{Vst3MidiEvent, events::*};
+
+struct MyEvent { offset: i32, note: i16, velocity: f32 }
+
+impl Vst3MidiEvent for MyEvent {
+    fn sample_offset(&self) -> i32 { self.offset }
 
     fn to_vst3_event(&self) -> Option<Vst3Event> {
-        // Convert your event to a VST3 event
-        // ...
+        Some(Vst3Event::NoteOn(NoteOnEvent {
+            header: EventHeader {
+                bus_index: 0, sample_offset: self.offset,
+                ppq_position: 0.0, flags: 0, event_type: K_NOTE_ON_EVENT,
+            },
+            channel: 0, pitch: self.note, tuning: 0.0,
+            velocity: self.velocity, length: 0, note_id: -1,
+        }))
     }
 }
 ```
+
+## Platform Support
+
+| Platform | Status |
+|----------|--------|
+| macOS (aarch64, x86_64) | Tested |
+| Linux (x86_64) | Supported |
+| Windows (x86_64) | Supported |
 
 ## License
 

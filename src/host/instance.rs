@@ -8,7 +8,8 @@ use crossbeam_channel::Receiver;
 use smallvec::SmallVec;
 
 use crate::com::{
-    BStream, ComponentHandler, EventList, HostApplication, ParameterChangesImpl, ParameterEditEvent,
+    BStream, ComponentHandler, EventList, HostApplication, ParameterChangesImpl,
+    ParameterEditEvent, ProgressEvent, UnitEvent,
 };
 use crate::error::{LoadStage, Result, Vst3Error};
 use crate::ffi::{
@@ -18,8 +19,8 @@ use crate::ffi::{
     K_INPUT, K_OUTPUT, K_REALTIME, K_RESULT_OK, K_RESULT_TRUE, K_SAMPLE_32, K_SAMPLE_64,
 };
 use crate::types::{
-    AudioBuffer, BufferPtrs, MidiEvent, NoteExpressionValue, ParameterChanges, PluginInfo, Sample,
-    TransportState, Vst3MidiEvent,
+    AudioBuffer, BufferPtrs, EditorSize, NoteExpressionValue, ParameterChanges, PluginInfo,
+    ProcessOutput, Sample, TransportState, Vst3MidiEvent, WindowHandle,
 };
 
 use super::library::Vst3Library;
@@ -59,6 +60,8 @@ pub(crate) struct HostContext {
     pub application: Box<HostApplication>,
     pub handler: Box<ComponentHandler>,
     pub param_event_rx: Receiver<ParameterEditEvent>,
+    pub progress_event_rx: Receiver<ProgressEvent>,
+    pub unit_event_rx: Receiver<UnitEvent>,
 }
 
 pub(crate) struct AudioIO {
@@ -268,7 +271,8 @@ impl Vst3Instance {
             .f64_support(supports_f64);
 
         let host_application = HostApplication::new("vst3-host");
-        let (component_handler, param_event_rx) = ComponentHandler::new();
+        let (component_handler, param_event_rx, progress_event_rx, unit_event_rx) =
+            ComponentHandler::new();
 
         // At least 2 channels to handle common stereo cases
         let input_ptr_count = num_input_channels.max(MIN_PTR_COUNT);
@@ -289,6 +293,8 @@ impl Vst3Instance {
                 application: host_application,
                 handler: component_handler,
                 param_event_rx,
+                progress_event_rx,
+                unit_event_rx,
             },
             audio: AudioIO {
                 sample_rate,
@@ -323,32 +329,34 @@ impl Vst3Instance {
         self.info.supports_f64
     }
 
-    pub fn set_use_f64(&mut self, use_f64: bool) -> Result<()> {
+    pub fn set_use_f64(&mut self, use_f64: bool) -> Result<&mut Self> {
         if use_f64 && !self.info.supports_f64 {
             return Err(Vst3Error::NotSupported(
                 "Plugin does not support 64-bit processing".to_string(),
             ));
         }
         self.audio.use_f64 = use_f64;
-        Ok(())
+        Ok(self)
     }
 
     pub fn sample_rate(&self) -> f64 {
         self.audio.sample_rate
     }
 
-    pub fn set_sample_rate(&mut self, rate: f64) {
+    pub fn set_sample_rate(&mut self, rate: f64) -> &mut Self {
         self.audio.sample_rate = rate;
         self.apply_process_setup();
+        self
     }
 
     pub fn block_size(&self) -> usize {
         self.audio.block_size
     }
 
-    pub fn set_block_size(&mut self, size: usize) {
+    pub fn set_block_size(&mut self, size: usize) -> &mut Self {
         self.audio.block_size = size;
         self.apply_process_setup();
+        self
     }
 
     pub fn num_input_channels(&self) -> usize {
@@ -387,8 +395,11 @@ impl Vst3Instance {
         param_changes: Option<&ParameterChanges>,
         note_expressions: &[NoteExpressionValue],
         transport: &TransportState,
-    ) -> (SmallVec<[MidiEvent; 64]>, ParameterChanges) {
-        let empty_result = (SmallVec::new(), ParameterChanges::new());
+    ) -> ProcessOutput {
+        let empty_result = ProcessOutput {
+            midi_events: SmallVec::new(),
+            parameter_changes: ParameterChanges::new(),
+        };
 
         if !self.is_active {
             return empty_result;
@@ -493,31 +504,36 @@ impl Vst3Instance {
         self.audio.input_events = Some(input_event_list);
         self.audio.output_events = Some(output_event_list);
 
-        (midi_out, param_out)
+        ProcessOutput {
+            midi_events: midi_out,
+            parameter_changes: param_out,
+        }
     }
 
-    pub fn get_parameter_count(&self) -> i32 {
+    pub fn parameter_count(&self) -> u32 {
         self.interfaces
             .with_controller(0, |ctrl, vt| unsafe { ((*vt).get_parameter_count)(ctrl) })
+            as u32
     }
 
-    pub fn get_parameter(&self, index: u32) -> f64 {
+    pub fn parameter(&self, index: u32) -> f64 {
         self.interfaces.with_controller(0.0, |ctrl, vt| unsafe {
             ((*vt).get_param_normalized)(ctrl, index)
         })
     }
 
-    pub fn set_parameter(&mut self, index: u32, value: f64) {
+    pub fn set_parameter(&mut self, index: u32, value: f64) -> &mut Self {
         self.interfaces.with_controller((), |ctrl, vt| unsafe {
             ((*vt).set_param_normalized)(ctrl, index, value);
         });
+        self
     }
 
-    pub fn get_parameter_info(&self, index: i32) -> Option<crate::ffi::Vst3ParameterInfo> {
+    pub fn parameter_info(&self, index: u32) -> Option<crate::ffi::Vst3ParameterInfo> {
         self.interfaces.with_controller(None, |ctrl, vt| {
             let mut info = crate::ffi::Vst3ParameterInfo::default();
             let result = unsafe {
-                ((*vt).get_parameter_info)(ctrl, index, &mut info as *mut _ as *mut c_void)
+                ((*vt).get_parameter_info)(ctrl, index as i32, &mut info as *mut _ as *mut c_void)
             };
             if result == K_RESULT_OK {
                 Some(info)
@@ -539,7 +555,31 @@ impl Vst3Instance {
         events
     }
 
-    pub fn get_state(&self) -> Result<Vec<u8>> {
+    pub fn progress_event_receiver(&self) -> &Receiver<ProgressEvent> {
+        &self.host.progress_event_rx
+    }
+
+    pub fn poll_progress_events(&self) -> Vec<ProgressEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = self.host.progress_event_rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    pub fn unit_event_receiver(&self) -> &Receiver<UnitEvent> {
+        &self.host.unit_event_rx
+    }
+
+    pub fn poll_unit_events(&self) -> Vec<UnitEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = self.host.unit_event_rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    pub fn state(&self) -> Result<Vec<u8>> {
         let mut stream = BStream::new();
 
         let result = unsafe {
@@ -550,25 +590,25 @@ impl Vst3Instance {
         };
 
         if result != K_RESULT_OK && result != K_RESULT_TRUE {
-            return self.get_state_fallback();
+            return self.state_fallback();
         }
 
         Ok(stream.data())
     }
 
-    fn get_state_fallback(&self) -> Result<Vec<u8>> {
-        let param_count = self.get_parameter_count();
+    fn state_fallback(&self) -> Result<Vec<u8>> {
+        let param_count = self.parameter_count();
         let mut state = Vec::with_capacity(4 + (param_count as usize * 8));
         state.extend_from_slice(&param_count.to_le_bytes());
-        for i in 0..param_count as u32 {
-            let value = self.get_parameter(i);
+        for i in 0..param_count {
+            let value = self.parameter(i);
             state.extend_from_slice(&value.to_le_bytes());
         }
 
         Ok(state)
     }
 
-    pub fn set_state(&mut self, data: &[u8]) -> Result<()> {
+    pub fn set_state(&mut self, data: &[u8]) -> Result<&mut Self> {
         if data.is_empty() {
             return Err(Vst3Error::StateError("Empty state data".to_string()));
         }
@@ -591,10 +631,10 @@ impl Vst3Instance {
             let _ = unsafe { ((*vt).set_component_state)(ctrl, stream.as_ptr()) };
         });
 
-        Ok(())
+        Ok(self)
     }
 
-    fn set_state_fallback(&mut self, data: &[u8]) -> Result<()> {
+    fn set_state_fallback(&mut self, data: &[u8]) -> Result<&mut Self> {
         if data.len() < 4 {
             return Err(Vst3Error::StateError("Invalid state data".to_string()));
         }
@@ -631,17 +671,14 @@ impl Vst3Instance {
             self.set_parameter(i as u32, value);
         }
 
-        Ok(())
+        Ok(self)
     }
 
     pub fn has_editor(&self) -> bool {
         self.interfaces.controller.is_some()
     }
 
-    /// # Safety
-    ///
-    /// `parent` must be a valid window handle for the target platform.
-    pub unsafe fn open_editor(&mut self, parent: *mut c_void) -> Result<(u32, u32)> {
+    pub fn open_editor(&mut self, parent: WindowHandle) -> Result<EditorSize> {
         let ctrl = self.interfaces.controller.ok_or(Vst3Error::NotSupported(
             "Plugin has no editor controller".to_string(),
         ))?;
@@ -653,50 +690,52 @@ impl Vst3Instance {
                     "Controller vtable missing".to_string(),
                 ))?;
 
-        let view_type = c"editor".as_ptr();
-        let view_ptr = ((*ctrl_vtable).create_view)(ctrl, view_type);
+        unsafe {
+            let view_type = c"editor".as_ptr();
+            let view_ptr = ((*ctrl_vtable).create_view)(ctrl, view_type);
 
-        if view_ptr.is_null() {
-            return Err(Vst3Error::NotSupported(
-                "Failed to create plugin view".to_string(),
-            ));
+            if view_ptr.is_null() {
+                return Err(Vst3Error::NotSupported(
+                    "Failed to create plugin view".to_string(),
+                ));
+            }
+
+            let view_vtable = *(view_ptr as *const *const IPlugViewVtable);
+
+            #[cfg(target_os = "macos")]
+            let platform_type = c"NSView".as_ptr();
+            #[cfg(target_os = "windows")]
+            let platform_type = c"HWND".as_ptr();
+            #[cfg(target_os = "linux")]
+            let platform_type = c"X11EmbedWindowID".as_ptr();
+
+            let result = ((*view_vtable).attached)(view_ptr, parent.as_ptr(), platform_type);
+
+            if result != K_RESULT_OK {
+                return Err(Vst3Error::PluginError {
+                    stage: LoadStage::Initialization,
+                    code: result,
+                });
+            }
+
+            let mut rect = ViewRect::default();
+            let result = ((*view_vtable).get_size)(view_ptr, &mut rect);
+
+            let (width, height) = if result == K_RESULT_OK {
+                (rect.width() as u32, rect.height() as u32)
+            } else {
+                self.editor.size
+            };
+
+            self.editor.view = Some(view_ptr);
+            self.editor.view_vtable = Some(view_vtable);
+            self.editor.size = (width, height);
+
+            Ok(EditorSize { width, height })
         }
-
-        let view_vtable = *(view_ptr as *const *const IPlugViewVtable);
-
-        #[cfg(target_os = "macos")]
-        let platform_type = c"NSView".as_ptr();
-        #[cfg(target_os = "windows")]
-        let platform_type = c"HWND".as_ptr();
-        #[cfg(target_os = "linux")]
-        let platform_type = c"X11EmbedWindowID".as_ptr();
-
-        let result = ((*view_vtable).attached)(view_ptr, parent, platform_type);
-
-        if result != K_RESULT_OK {
-            return Err(Vst3Error::PluginError {
-                stage: LoadStage::Initialization,
-                code: result,
-            });
-        }
-
-        let mut rect = ViewRect::default();
-        let result = ((*view_vtable).get_size)(view_ptr, &mut rect);
-
-        let (width, height) = if result == K_RESULT_OK {
-            (rect.width() as u32, rect.height() as u32)
-        } else {
-            self.editor.size
-        };
-
-        self.editor.view = Some(view_ptr);
-        self.editor.view_vtable = Some(view_vtable);
-        self.editor.size = (width, height);
-
-        Ok((width, height))
     }
 
-    pub fn close_editor(&mut self) {
+    pub fn close_editor(&mut self) -> &mut Self {
         if let (Some(view), Some(vtable)) = (self.editor.view, self.editor.view_vtable) {
             unsafe {
                 ((*vtable).removed)(view);
@@ -706,6 +745,7 @@ impl Vst3Instance {
             self.editor.view = None;
             self.editor.view_vtable = None;
         }
+        self
     }
 
     fn connect_component_and_controller(&self) {

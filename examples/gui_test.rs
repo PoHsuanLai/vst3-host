@@ -16,7 +16,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-use vst3_host::Vst3Instance;
+use vst3_host::{Vst3Instance, WindowHandle};
 
 const PLUGIN_PATH: &str = "/Library/Audio/Plug-Ins/VST3/TAL-NoiseMaker.vst3";
 
@@ -120,12 +120,13 @@ impl ApplicationHandler for App {
                         };
 
                         println!("Opening plugin editor...");
-                        match unsafe { plugin.open_editor(parent) } {
-                            Ok((width, height)) => {
-                                println!("Editor opened: {}x{}", width, height);
+                        let handle = unsafe { WindowHandle::from_raw(parent) };
+                        match plugin.open_editor(handle) {
+                            Ok(size) => {
+                                println!("Editor opened: {}x{}", size.width, size.height);
                                 // Resize window to fit editor
                                 let _ = window.request_inner_size(winit::dpi::LogicalSize::new(
-                                    width, height,
+                                    size.width, size.height,
                                 ));
                                 self.editor_open = true;
                             }

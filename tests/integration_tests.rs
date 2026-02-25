@@ -191,7 +191,7 @@ fn test_state_save_load() {
     let mut plugin =
         Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
-    let state = plugin.get_state();
+    let state = plugin.state();
     match state {
         Ok(data) => {
             println!("Saved state: {} bytes", data.len());
@@ -219,11 +219,11 @@ fn test_get_parameters() {
 
     let plugin = Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
-    let param_count = plugin.get_parameter_count();
+    let param_count = plugin.parameter_count();
     println!("Plugin has {} parameters", param_count);
 
     for i in 0..param_count.min(10) {
-        let value = plugin.get_parameter(i as u32);
+        let value = plugin.parameter(i);
         println!("  [{}] value: {}", i, value);
     }
 }
@@ -242,10 +242,10 @@ fn test_set_parameter() {
     let mut plugin =
         Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
-    if plugin.get_parameter_count() > 0 {
+    if plugin.parameter_count() > 0 {
         println!("Setting parameter 0 to 0.5");
         plugin.set_parameter(0, 0.5);
-        let value = plugin.get_parameter(0);
+        let value = plugin.parameter(0);
         println!("Read back value: {}", value);
     }
 }

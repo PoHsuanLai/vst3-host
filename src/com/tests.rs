@@ -3,15 +3,16 @@
 use std::ffi::c_void;
 use std::time::Duration;
 
-use vst3_host::com::{
-    ConnectionPoint, DataExchangeHandler, HostApplication, ParamValueQueueImpl, ProgressEvent,
-    ProgressHandler, UnitEvent, UnitHandler,
+use super::{
+    BStream, ComponentHandler, ConnectionPoint, DataExchangeHandler, EventList, HostApplication,
+    ParamValueQueueImpl, ParameterChangesImpl, ParameterEditEvent, ProgressEvent, ProgressHandler,
+    UnitEvent, UnitHandler,
 };
-use vst3_host::ffi::K_RESULT_OK;
-use vst3_host::types::{ParameterChanges, ParameterQueue};
-use vst3_host::{
-    BStream, ComponentHandler, EventList, MidiEvent, ParameterChangesImpl, ParameterEditEvent,
+use crate::ffi::{
+    DataExchangeBlock, IBStreamVtable, IComponentHandlerVtable, IDataExchangeHandlerVtable,
+    IEventListVtable, IParameterChangesVtable, IProgressVtable, IUnitHandlerVtable, K_RESULT_OK,
 };
+use crate::types::{MidiEvent, ParameterChanges, ParameterQueue};
 
 #[test]
 fn test_bstream_new() {
@@ -42,7 +43,6 @@ fn test_bstream_default() {
 #[test]
 fn test_host_application_new() {
     let _host = HostApplication::new("TestHost");
-    // Just verify it doesn't panic
 }
 
 #[test]
@@ -54,25 +54,23 @@ fn test_host_application_as_ptr() {
 
 #[test]
 fn test_host_application_long_name_truncates() {
-    // Name longer than 127 chars should be truncated
     let long_name = "A".repeat(200);
     let _host = HostApplication::new(&long_name);
-    // Should not panic
 }
 
 #[test]
 fn test_component_handler_new() {
-    let (handler, _rx) = ComponentHandler::new();
+    let (handler, _rx, _prx, _urx) = ComponentHandler::new();
     assert!(!handler.as_ptr().is_null());
 }
 
 #[test]
 fn test_component_handler_events() {
-    let (handler, rx) = ComponentHandler::new();
+    let (handler, rx, _prx, _urx) = ComponentHandler::new();
     let ptr = handler.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IComponentHandlerVtable);
+        let vtable_ptr = *(ptr as *const *const IComponentHandlerVtable);
         let vtable = &*vtable_ptr;
 
         let result = (vtable.begin_edit)(ptr, 42);
@@ -103,11 +101,11 @@ fn test_component_handler_events() {
 
 #[test]
 fn test_component_handler_restart() {
-    let (handler, rx) = ComponentHandler::new();
+    let (handler, rx, _prx, _urx) = ComponentHandler::new();
     let ptr = handler.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IComponentHandlerVtable);
+        let vtable_ptr = *(ptr as *const *const IComponentHandlerVtable);
         let vtable = &*vtable_ptr;
 
         let result = (vtable.restart_component)(ptr, 0b1010);
@@ -133,7 +131,7 @@ fn test_progress_handler_events() {
     let ptr = handler.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IProgressVtable);
+        let vtable_ptr = *(ptr as *const *const IProgressVtable);
         let vtable = &*vtable_ptr;
 
         let mut out_id: u64 = 0;
@@ -188,7 +186,7 @@ fn test_unit_handler_selection() {
     let ptr = handler.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IUnitHandlerVtable);
+        let vtable_ptr = *(ptr as *const *const IUnitHandlerVtable);
         let vtable = &*vtable_ptr;
 
         let result = (vtable.notify_unit_selection)(ptr, 5);
@@ -205,7 +203,7 @@ fn test_unit_handler_program_list() {
     let ptr = handler.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IUnitHandlerVtable);
+        let vtable_ptr = *(ptr as *const *const IUnitHandlerVtable);
         let vtable = &*vtable_ptr;
 
         let result = (vtable.notify_program_list_change)(ptr, 10, 3);
@@ -237,17 +235,17 @@ fn test_data_exchange_open_close_queue() {
     let ptr = handler.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IDataExchangeHandlerVtable);
+        let vtable_ptr = *(ptr as *const *const IDataExchangeHandlerVtable);
         let vtable = &*vtable_ptr;
 
         let mut queue_id: u32 = 0;
         let result = (vtable.open_queue)(
             ptr,
-            std::ptr::null_mut(), // processor
-            1024,                 // block_size
-            4,                    // num_blocks
-            16,                   // alignment
-            100,                  // user_context_id
+            std::ptr::null_mut(),
+            1024,
+            4,
+            16,
+            100,
             &mut queue_id,
         );
         assert_eq!(result, K_RESULT_OK);
@@ -264,22 +262,22 @@ fn test_data_exchange_lock_free_block() {
     let ptr = handler.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IDataExchangeHandlerVtable);
+        let vtable_ptr = *(ptr as *const *const IDataExchangeHandlerVtable);
         let vtable = &*vtable_ptr;
 
         let mut queue_id: u32 = 0;
         let result = (vtable.open_queue)(
             ptr,
             std::ptr::null_mut(),
-            64, // block_size
-            2,  // num_blocks
-            1,  // alignment
-            42, // user_context_id
+            64,
+            2,
+            1,
+            42,
             &mut queue_id,
         );
         assert_eq!(result, K_RESULT_OK);
 
-        let mut block = vst3_host::ffi::DataExchangeBlock {
+        let mut block = DataExchangeBlock {
             data: std::ptr::null_mut(),
             size: 0,
             block_id: 0,
@@ -317,7 +315,7 @@ fn test_event_list_update_from_midi() {
 
     unsafe {
         let ptr = event_list.as_ptr();
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IEventListVtable);
+        let vtable_ptr = *(ptr as *const *const IEventListVtable);
         let vtable = &*vtable_ptr;
 
         let count = (vtable.get_event_count)(ptr);
@@ -337,7 +335,7 @@ fn test_event_list_clear() {
 
     unsafe {
         let ptr = event_list.as_ptr();
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IEventListVtable);
+        let vtable_ptr = *(ptr as *const *const IEventListVtable);
         let vtable = &*vtable_ptr;
 
         let count = (vtable.get_event_count)(ptr);
@@ -400,7 +398,7 @@ fn test_parameter_changes_vtable() {
     let ptr = impl_changes.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IParameterChangesVtable);
+        let vtable_ptr = *(ptr as *const *const IParameterChangesVtable);
         let vtable = &*vtable_ptr;
 
         let count = (vtable.get_parameter_count)(ptr);
@@ -432,7 +430,7 @@ fn test_bstream_ref_counting() {
     let ptr = Box::into_raw(stream) as *mut c_void;
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IBStreamVtable);
+        let vtable_ptr = *(ptr as *const *const IBStreamVtable);
         let vtable = &*vtable_ptr;
 
         let count = (vtable.add_ref)(ptr);
@@ -454,11 +452,11 @@ fn test_bstream_ref_counting() {
 
 #[test]
 fn test_component_handler_ref_counting() {
-    let (handler, _rx) = ComponentHandler::new();
+    let (handler, _rx, _prx, _urx) = ComponentHandler::new();
     let ptr = Box::into_raw(handler) as *mut c_void;
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IComponentHandlerVtable);
+        let vtable_ptr = *(ptr as *const *const IComponentHandlerVtable);
         let vtable = &*vtable_ptr;
 
         let count = (vtable.add_ref)(ptr);
@@ -474,17 +472,17 @@ fn test_component_handler_ref_counting() {
 
 #[test]
 fn test_component_handler_thread_safe() {
-    let (handler, rx) = ComponentHandler::new();
+    let (handler, rx, _prx, _urx) = ComponentHandler::new();
     let ptr = handler.as_ptr();
 
     let handles: Vec<_> = (0..4)
         .map(|i| {
-            let ptr = ptr as usize; // Convert to usize for Send
+            let ptr = ptr as usize;
             std::thread::spawn(move || {
                 let ptr = ptr as *mut c_void;
                 unsafe {
                     let vtable_ptr =
-                        *(ptr as *const *const vst3_host::ffi::IComponentHandlerVtable);
+                        *(ptr as *const *const IComponentHandlerVtable);
                     let vtable = &*vtable_ptr;
 
                     for j in 0..10 {
@@ -514,7 +512,7 @@ fn test_bstream_vtable_read_write() {
     let ptr = stream.as_ptr();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const vst3_host::ffi::IBStreamVtable);
+        let vtable_ptr = *(ptr as *const *const IBStreamVtable);
         let vtable = &*vtable_ptr;
 
         let data = b"Hello, VST3!";
@@ -529,7 +527,7 @@ fn test_bstream_vtable_read_write() {
         assert_eq!(written, data.len() as i32);
 
         let mut new_pos: i64 = 0;
-        let result = (vtable.seek)(ptr, 0, 0, &mut new_pos); // 0 = K_IB_SEEK_SET
+        let result = (vtable.seek)(ptr, 0, 0, &mut new_pos);
         assert_eq!(result, K_RESULT_OK);
         assert_eq!(new_pos, 0);
 

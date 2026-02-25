@@ -11,16 +11,30 @@ mod progress;
 mod stream;
 mod unit_handler;
 
-pub use component_handler::{ComponentHandler, ParameterEditEvent};
-pub use connection_point::ConnectionPoint;
-pub use data_exchange::{DataBlock, DataExchangeHandler};
+#[cfg(test)]
+mod tests;
+
+// Types used by instance.rs (production code)
+pub use component_handler::{ComponentHandler, ParameterEditEvent, ProgressEvent, UnitEvent};
 pub use event_list::EventList;
-pub use host_application::{AttributeList, HostApplication, Message};
+pub use host_application::HostApplication;
 pub use param_changes::ParameterChangesImpl;
-pub use param_queue::ParamValueQueueImpl;
-pub use progress::{ProgressEvent, ProgressHandler};
 pub use stream::BStream;
-pub use unit_handler::{UnitEvent, UnitHandler};
+
+// Types used only by COM tests
+#[cfg(test)]
+pub use connection_point::ConnectionPoint;
+#[cfg(test)]
+pub use data_exchange::DataExchangeHandler;
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use host_application::{AttributeList, Message};
+#[cfg(test)]
+pub use param_queue::ParamValueQueueImpl;
+#[cfg(test)]
+pub use progress::ProgressHandler;
+#[cfg(test)]
+pub use unit_handler::UnitHandler;
 
 // ---------------------------------------------------------------------------
 // Shared COM helpers
