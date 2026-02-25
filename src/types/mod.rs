@@ -17,19 +17,10 @@ pub use events::{
 pub use params::{ParameterChanges, ParameterPoint, ParameterQueue};
 pub use transport::TransportState;
 
-// ---------------------------------------------------------------------------
-// ProcessOutput
-// ---------------------------------------------------------------------------
-
-/// Output from a single `process()` call.
 pub struct ProcessOutput {
     pub midi_events: SmallVec<[MidiEvent; 64]>,
     pub parameter_changes: ParameterChanges,
 }
-
-// ---------------------------------------------------------------------------
-// EditorSize
-// ---------------------------------------------------------------------------
 
 /// Pixel dimensions of a plugin editor window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,10 +28,6 @@ pub struct EditorSize {
     pub width: u32,
     pub height: u32,
 }
-
-// ---------------------------------------------------------------------------
-// WindowHandle
-// ---------------------------------------------------------------------------
 
 /// A platform-specific parent window handle for embedding plugin editors.
 ///

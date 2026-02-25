@@ -14,14 +14,12 @@ mod unit_handler;
 #[cfg(test)]
 mod tests;
 
-// Types used by instance.rs (production code)
 pub use component_handler::{ComponentHandler, ParameterEditEvent, ProgressEvent, UnitEvent};
 pub use event_list::EventList;
 pub use host_application::HostApplication;
 pub use param_changes::ParameterChangesImpl;
 pub use stream::BStream;
 
-// Types used only by COM tests
 #[cfg(test)]
 pub use connection_point::ConnectionPoint;
 #[cfg(test)]
@@ -35,10 +33,6 @@ pub use param_queue::ParamValueQueueImpl;
 pub use progress::ProgressHandler;
 #[cfg(test)]
 pub use unit_handler::UnitHandler;
-
-// ---------------------------------------------------------------------------
-// Shared COM helpers
-// ---------------------------------------------------------------------------
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};

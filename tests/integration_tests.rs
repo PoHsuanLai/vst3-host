@@ -91,7 +91,7 @@ fn test_process_silence() {
     let mut out_r = output_right.as_mut_slice();
     let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
 
-    let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 512, 44100.0);
+    let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
     let transport = TransportState::new().tempo(120.0).playing(true);
     let midi: [MidiEvent; 0] = [];
 
@@ -124,7 +124,7 @@ fn test_process_with_midi() {
     let mut out_r = output_right.as_mut_slice();
     let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
 
-    let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 512, 44100.0);
+    let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
     let transport = TransportState::new().tempo(120.0).playing(true);
 
     let midi = [MidiEvent::note_on(0, 0, 60, 0.8)];
@@ -161,7 +161,7 @@ fn test_process_multiple_buffers() {
         let mut out_r = output_right.as_mut_slice();
         let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
 
-        let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 256, 44100.0);
+        let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
         let transport = TransportState::new().tempo(120.0).playing(true);
 
         let midi: Vec<MidiEvent> = if i == 0 {
@@ -279,7 +279,7 @@ fn test_rapid_process_calls() {
         let mut out_r = output_right.as_mut_slice();
         let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
 
-        let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 64, 44100.0);
+        let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
         plugin.process(&mut buffer, &midi, None, &[], &transport);
     }
     let elapsed = start.elapsed();

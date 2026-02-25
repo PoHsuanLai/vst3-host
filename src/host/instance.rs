@@ -25,10 +25,6 @@ use crate::types::{
 
 use super::library::Vst3Library;
 
-// ---------------------------------------------------------------------------
-// Sub-structs
-// ---------------------------------------------------------------------------
-
 pub(crate) struct PluginInterfaces {
     pub component: *mut c_void,
     pub component_vtable: *const IComponentVtable,
@@ -157,10 +153,6 @@ unsafe fn get_bus_channel_count(
         None
     }
 }
-
-// ---------------------------------------------------------------------------
-// Vst3Instance
-// ---------------------------------------------------------------------------
 
 pub struct Vst3Instance {
     _library: Arc<Vst3Library>,

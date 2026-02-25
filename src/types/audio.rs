@@ -106,12 +106,14 @@ pub struct AudioBuffer<'a, T: Sample = f32> {
 }
 
 impl<'a, T: Sample> AudioBuffer<'a, T> {
-    pub fn new(
-        inputs: &'a [&'a [T]],
-        outputs: &'a mut [&'a mut [T]],
-        num_samples: usize,
-        sample_rate: f64,
-    ) -> Self {
+    /// `num_samples` is derived from the first output channel's length, or the
+    /// first input channel's length if there are no outputs. Panics if both are empty.
+    pub fn new(inputs: &'a [&'a [T]], outputs: &'a mut [&'a mut [T]], sample_rate: f64) -> Self {
+        let num_samples = outputs
+            .first()
+            .map(|s| s.len())
+            .or_else(|| inputs.first().map(|s| s.len()))
+            .expect("AudioBuffer requires at least one input or output channel");
         Self {
             inputs,
             outputs,

@@ -371,7 +371,7 @@ unsafe extern "system" fn attr_set_string(
             string.push(*ptr);
             ptr = ptr.add(1);
         }
-        string.push(0); // null terminator
+        string.push(0);
         attrs
             .attributes
             .lock()

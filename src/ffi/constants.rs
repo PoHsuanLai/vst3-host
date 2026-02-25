@@ -63,8 +63,6 @@ pub const K_VIBRATO_TYPE_ID: u32 = 3;
 /// Filter cutoff: 0.0 = dark, 1.0 = bright.
 pub const K_BRIGHTNESS_TYPE_ID: u32 = 4;
 
-// RestartFlags (for IComponentHandler::restartComponent)
-
 pub const K_RELOAD_COMPONENT: i32 = 1 << 0;
 pub const K_IO_CHANGED: i32 = 1 << 1;
 pub const K_PARAM_VALUES_CHANGED: i32 = 1 << 2;
@@ -83,8 +81,6 @@ pub const K_IB_SEEK_END: i32 = 2;
 
 pub const K_PROGRESS_ASYNC_STATE_RESTORATION: u32 = 0;
 pub const K_PROGRESS_UI_BACKGROUND_TASK: u32 = 1;
-
-// Knob Modes (for IEditController2)
 
 pub const K_KNOB_CIRCULAR_MODE: i32 = 0;
 pub const K_KNOB_RELATIVE_CIRCULAR_MODE: i32 = 1;

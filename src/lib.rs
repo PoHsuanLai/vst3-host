@@ -17,7 +17,6 @@ pub use types::{
     TransportState, Vst3MidiEvent, WindowHandle,
 };
 
-// COM event types for consumers that poll host events from Vst3Instance.
 pub use com::{ParameterEditEvent, ProgressEvent, UnitEvent};
 
 /// FFI event types for custom [`Vst3MidiEvent`] implementations.

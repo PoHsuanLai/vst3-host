@@ -55,7 +55,7 @@ let inputs: [&[f32]; 2] = [&[0.0; 512], &[0.0; 512]];
 let mut out_l = vec![0.0f32; 512];
 let mut out_r = vec![0.0f32; 512];
 let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
-let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 512, 44100.0);
+let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
 
 // Process with MIDI
 let midi = [MidiEvent::note_on(0, 0, 60, 0.8)];

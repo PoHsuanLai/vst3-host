@@ -113,10 +113,6 @@ unsafe extern "system" fn unit_handler_notify_program_list(
     K_RESULT_OK
 }
 
-// ---------------------------------------------------------------------------
-// IUnitHandler2
-// ---------------------------------------------------------------------------
-
 static UNIT_HANDLER2_VTABLE: IUnitHandler2Vtable = IUnitHandler2Vtable {
     query_interface: unit_handler2_query_interface,
     add_ref: unit_handler2_add_ref,

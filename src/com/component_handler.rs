@@ -215,10 +215,6 @@ unsafe extern "system" fn handler_restart_component(this: *mut c_void, flags: i3
     K_RESULT_OK
 }
 
-// ---------------------------------------------------------------------------
-// IComponentHandler2
-// ---------------------------------------------------------------------------
-
 static COMPONENT_HANDLER2_VTABLE: IComponentHandler2Vtable = IComponentHandler2Vtable {
     query_interface: handler2_query_interface,
     add_ref: handler2_add_ref,
@@ -229,7 +225,6 @@ static COMPONENT_HANDLER2_VTABLE: IComponentHandler2Vtable = IComponentHandler2V
     finish_group_edit: handler2_finish_group_edit,
 };
 
-/// Recover the parent `ComponentHandler` from a secondary vtable pointer.
 unsafe fn handler_from_vtable2(this: *mut c_void) -> &'static ComponentHandler {
     &*container_of!(this, ComponentHandler, vtable2)
 }
@@ -285,10 +280,6 @@ unsafe extern "system" fn handler2_finish_group_edit(this: *mut c_void) -> i32 {
     K_RESULT_OK
 }
 
-// ---------------------------------------------------------------------------
-// IComponentHandler3
-// ---------------------------------------------------------------------------
-
 static COMPONENT_HANDLER3_VTABLE: IComponentHandler3Vtable = IComponentHandler3Vtable {
     query_interface: handler3_query_interface,
     add_ref: handler3_add_ref,
@@ -322,10 +313,6 @@ unsafe extern "system" fn handler3_create_context_menu(
 ) -> *mut c_void {
     std::ptr::null_mut()
 }
-
-// ---------------------------------------------------------------------------
-// IComponentHandlerBusActivation
-// ---------------------------------------------------------------------------
 
 static COMPONENT_HANDLER_BUS_ACTIVATION_VTABLE: IComponentHandlerBusActivationVtable =
     IComponentHandlerBusActivationVtable {
@@ -372,10 +359,6 @@ unsafe extern "system" fn handler_bus_request_activation(
         });
     K_RESULT_OK
 }
-
-// ---------------------------------------------------------------------------
-// IProgress (embedded in ComponentHandler)
-// ---------------------------------------------------------------------------
 
 static HANDLER_PROGRESS_VTABLE: IProgressVtable = IProgressVtable {
     query_interface: handler_progress_query_interface,
@@ -455,10 +438,6 @@ unsafe extern "system" fn handler_progress_finish(this: *mut c_void, id: u64) ->
     K_RESULT_OK
 }
 
-// ---------------------------------------------------------------------------
-// IUnitHandler (embedded in ComponentHandler)
-// ---------------------------------------------------------------------------
-
 static HANDLER_UNIT_VTABLE: IUnitHandlerVtable = IUnitHandlerVtable {
     query_interface: handler_unit_query_interface,
     add_ref: handler_unit_add_ref,
@@ -504,10 +483,6 @@ unsafe extern "system" fn handler_unit_notify_program_list(
     });
     K_RESULT_OK
 }
-
-// ---------------------------------------------------------------------------
-// IUnitHandler2 (embedded in ComponentHandler)
-// ---------------------------------------------------------------------------
 
 static HANDLER_UNIT2_VTABLE: IUnitHandler2Vtable = IUnitHandler2Vtable {
     query_interface: handler_unit2_query_interface,
