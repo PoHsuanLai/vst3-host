@@ -1,6 +1,6 @@
 # vst3-host
 
-[![CI](https://github.com/AcaciaAudio/vst3-host/actions/workflows/ci.yml/badge.svg)](https://github.com/AcaciaAudio/vst3-host/actions/workflows/ci.yml)
+[![CI](https://github.com/PoHsuanLai/vst3-host/actions/workflows/ci.yml/badge.svg)](https://github.com/PoHsuanLai/vst3-host/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/vst3-host.svg)](https://crates.io/crates/vst3-host)
 [![docs.rs](https://img.shields.io/docsrs/vst3-host)](https://docs.rs/vst3-host)
 [![License](https://img.shields.io/crates/l/vst3-host.svg)](LICENSE-MIT)
