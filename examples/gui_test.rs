@@ -126,7 +126,8 @@ impl ApplicationHandler for App {
                                 println!("Editor opened: {}x{}", size.width, size.height);
                                 // Resize window to fit editor
                                 let _ = window.request_inner_size(winit::dpi::LogicalSize::new(
-                                    size.width, size.height,
+                                    size.width,
+                                    size.height,
                                 ));
                                 self.editor_open = true;
                             }

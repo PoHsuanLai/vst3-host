@@ -422,7 +422,11 @@ unsafe extern "system" fn handler_progress_start(
     K_RESULT_OK
 }
 
-unsafe extern "system" fn handler_progress_update(this: *mut c_void, id: u64, progress: f64) -> i32 {
+unsafe extern "system" fn handler_progress_update(
+    this: *mut c_void,
+    id: u64,
+    progress: f64,
+) -> i32 {
     let handler = &*container_of!(this, ComponentHandler, vtable_progress);
     let _ = handler
         .progress_sender
@@ -432,9 +436,7 @@ unsafe extern "system" fn handler_progress_update(this: *mut c_void, id: u64, pr
 
 unsafe extern "system" fn handler_progress_finish(this: *mut c_void, id: u64) -> i32 {
     let handler = &*container_of!(this, ComponentHandler, vtable_progress);
-    let _ = handler
-        .progress_sender
-        .send(ProgressEvent::Finished { id });
+    let _ = handler.progress_sender.send(ProgressEvent::Finished { id });
     K_RESULT_OK
 }
 

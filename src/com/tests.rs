@@ -239,15 +239,8 @@ fn test_data_exchange_open_close_queue() {
         let vtable = &*vtable_ptr;
 
         let mut queue_id: u32 = 0;
-        let result = (vtable.open_queue)(
-            ptr,
-            std::ptr::null_mut(),
-            1024,
-            4,
-            16,
-            100,
-            &mut queue_id,
-        );
+        let result =
+            (vtable.open_queue)(ptr, std::ptr::null_mut(), 1024, 4, 16, 100, &mut queue_id);
         assert_eq!(result, K_RESULT_OK);
         assert_eq!(queue_id, 1);
 
@@ -266,15 +259,7 @@ fn test_data_exchange_lock_free_block() {
         let vtable = &*vtable_ptr;
 
         let mut queue_id: u32 = 0;
-        let result = (vtable.open_queue)(
-            ptr,
-            std::ptr::null_mut(),
-            64,
-            2,
-            1,
-            42,
-            &mut queue_id,
-        );
+        let result = (vtable.open_queue)(ptr, std::ptr::null_mut(), 64, 2, 1, 42, &mut queue_id);
         assert_eq!(result, K_RESULT_OK);
 
         let mut block = DataExchangeBlock {
@@ -481,8 +466,7 @@ fn test_component_handler_thread_safe() {
             std::thread::spawn(move || {
                 let ptr = ptr as *mut c_void;
                 unsafe {
-                    let vtable_ptr =
-                        *(ptr as *const *const IComponentHandlerVtable);
+                    let vtable_ptr = *(ptr as *const *const IComponentHandlerVtable);
                     let vtable = &*vtable_ptr;
 
                     for j in 0..10 {

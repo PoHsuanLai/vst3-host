@@ -416,15 +416,8 @@ pub struct IDataExchangeHandlerVtable {
         unsafe extern "system" fn(*mut c_void, *const [u8; 16], *mut *mut c_void) -> i32,
     pub add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     pub release: unsafe extern "system" fn(*mut c_void) -> u32,
-    pub open_queue: unsafe extern "system" fn(
-        *mut c_void,
-        *mut c_void,
-        u32,
-        u32,
-        u32,
-        u32,
-        *mut u32,
-    ) -> i32,
+    pub open_queue:
+        unsafe extern "system" fn(*mut c_void, *mut c_void, u32, u32, u32, u32, *mut u32) -> i32,
     pub close_queue: unsafe extern "system" fn(*mut c_void, u32) -> i32,
     pub lock_block: unsafe extern "system" fn(*mut c_void, u32, *mut DataExchangeBlock) -> i32,
     pub free_block: unsafe extern "system" fn(*mut c_void, u32, u32, u8) -> i32,
@@ -439,11 +432,6 @@ pub struct IDataExchangeReceiverVtable {
     pub release: unsafe extern "system" fn(*mut c_void) -> u32,
     pub queue_opened: unsafe extern "system" fn(*mut c_void, u32, u32, *mut u8) -> i32,
     pub queue_closed: unsafe extern "system" fn(*mut c_void, u32) -> i32,
-    pub on_data_exchange_blocks_received: unsafe extern "system" fn(
-        *mut c_void,
-        u32,
-        u32,
-        *const DataExchangeBlock,
-        u8,
-    ) -> i32,
+    pub on_data_exchange_blocks_received:
+        unsafe extern "system" fn(*mut c_void, u32, u32, *const DataExchangeBlock, u8) -> i32,
 }

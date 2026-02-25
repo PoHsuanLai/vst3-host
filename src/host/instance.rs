@@ -205,13 +205,14 @@ impl Vst3Instance {
 
         let component = library.create_instance(&class_info, &IID_ICOMPONENT)?;
 
-        let processor = unsafe { query_interface(component, &IID_IAUDIO_PROCESSOR) }.ok_or_else(
-            || Vst3Error::LoadFailed {
-                path: path.to_path_buf(),
-                stage: LoadStage::Instantiation,
-                reason: "VST3 plugin does not support IAudioProcessor".to_string(),
-            },
-        )?;
+        let processor =
+            unsafe { query_interface(component, &IID_IAUDIO_PROCESSOR) }.ok_or_else(|| {
+                Vst3Error::LoadFailed {
+                    path: path.to_path_buf(),
+                    stage: LoadStage::Instantiation,
+                    reason: "VST3 plugin does not support IAudioProcessor".to_string(),
+                }
+            })?;
 
         let component_vtable = unsafe { *(component as *const *const IComponentVtable) };
 
@@ -675,12 +676,12 @@ impl Vst3Instance {
             "Plugin has no editor controller".to_string(),
         ))?;
 
-        let ctrl_vtable =
-            self.interfaces
-                .controller_vtable
-                .ok_or(Vst3Error::NotSupported(
-                    "Controller vtable missing".to_string(),
-                ))?;
+        let ctrl_vtable = self
+            .interfaces
+            .controller_vtable
+            .ok_or(Vst3Error::NotSupported(
+                "Controller vtable missing".to_string(),
+            ))?;
 
         unsafe {
             let view_type = c"editor".as_ptr();
@@ -746,7 +747,8 @@ impl Vst3Instance {
             None => return,
         };
 
-        let comp_conn = unsafe { query_interface(self.interfaces.component, &IID_ICONNECTION_POINT) };
+        let comp_conn =
+            unsafe { query_interface(self.interfaces.component, &IID_ICONNECTION_POINT) };
         let comp_conn = match comp_conn {
             Some(ptr) => ptr,
             None => return,
@@ -777,10 +779,7 @@ impl Vst3Instance {
     fn initialize(&mut self) -> Result<()> {
         let host_ptr = self.host.application.as_ptr();
         let result = unsafe {
-            ((*self.interfaces.component_vtable).initialize)(
-                self.interfaces.component,
-                host_ptr,
-            )
+            ((*self.interfaces.component_vtable).initialize)(self.interfaces.component, host_ptr)
         };
 
         if result != K_RESULT_OK && result != K_RESULT_TRUE {
@@ -948,14 +947,8 @@ impl Drop for Vst3Instance {
 
         if self.is_active {
             unsafe {
-                ((*self.interfaces.processor_vtable).set_processing)(
-                    self.interfaces.processor,
-                    0,
-                );
-                ((*self.interfaces.component_vtable).set_active)(
-                    self.interfaces.component,
-                    0,
-                );
+                ((*self.interfaces.processor_vtable).set_processing)(self.interfaces.processor, 0);
+                ((*self.interfaces.component_vtable).set_active)(self.interfaces.component, 0);
             }
         }
 
