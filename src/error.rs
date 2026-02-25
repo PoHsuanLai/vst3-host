@@ -3,10 +3,8 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
-/// Result type alias for vst3-host operations.
 pub type Result<T> = std::result::Result<T, Vst3Error>;
 
-/// Errors that can occur when loading or using VST3 plugins.
 #[derive(Error, Debug)]
 pub enum Vst3Error {
     #[error("Failed to load plugin at {path}: {stage} - {reason}")]
@@ -32,7 +30,6 @@ pub enum Vst3Error {
     StateError(String),
 }
 
-/// Stage of plugin loading/initialization where an error occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadStage {
     Scanning,

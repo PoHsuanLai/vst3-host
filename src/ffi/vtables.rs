@@ -4,7 +4,6 @@ use std::ffi::c_void;
 
 use super::structs::{PClassInfo, PFactoryInfo, ProcessData, ProcessSetup, ViewRect};
 
-/// IUnknown vtable - base interface for all COM objects.
 #[repr(C)]
 pub struct IUnknownVtable {
     pub query_interface:
@@ -13,7 +12,6 @@ pub struct IUnknownVtable {
     pub release: unsafe extern "system" fn(*mut c_void) -> u32,
 }
 
-/// IPluginFactory vtable.
 #[repr(C)]
 pub struct IPluginFactoryVtable {
     pub query_interface:
@@ -31,7 +29,6 @@ pub struct IPluginFactoryVtable {
     ) -> i32,
 }
 
-/// IPluginBase vtable.
 #[repr(C)]
 pub struct IPluginBaseVtable {
     pub query_interface:
@@ -42,7 +39,6 @@ pub struct IPluginBaseVtable {
     pub terminate: unsafe extern "system" fn(*mut c_void) -> i32,
 }
 
-/// IComponent vtable.
 #[repr(C)]
 pub struct IComponentVtable {
     pub query_interface:
@@ -62,7 +58,6 @@ pub struct IComponentVtable {
     pub get_state: unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32,
 }
 
-/// IAudioProcessor vtable.
 #[repr(C)]
 pub struct IAudioProcessorVtable {
     pub query_interface:
@@ -80,7 +75,6 @@ pub struct IAudioProcessorVtable {
     pub get_tail_samples: unsafe extern "system" fn(*mut c_void) -> u32,
 }
 
-/// IEditController vtable.
 #[repr(C)]
 pub struct IEditControllerVtable {
     pub query_interface:
@@ -106,7 +100,6 @@ pub struct IEditControllerVtable {
     pub create_view: unsafe extern "system" fn(*mut c_void, *const i8) -> *mut c_void,
 }
 
-/// IPlugView vtable.
 #[repr(C)]
 pub struct IPlugViewVtable {
     pub query_interface:
@@ -127,7 +120,6 @@ pub struct IPlugViewVtable {
     pub check_size_constraint: unsafe extern "system" fn(*mut c_void, *mut ViewRect) -> i32,
 }
 
-/// IEventList vtable.
 #[repr(C)]
 pub struct IEventListVtable {
     pub query_interface:
@@ -139,7 +131,6 @@ pub struct IEventListVtable {
     pub add_event: unsafe extern "system" fn(*mut c_void, *const c_void) -> i32,
 }
 
-/// IParamValueQueue vtable.
 #[repr(C)]
 pub struct IParamValueQueueVtable {
     pub query_interface:
@@ -152,7 +143,6 @@ pub struct IParamValueQueueVtable {
     pub add_point: unsafe extern "system" fn(*mut c_void, i32, f64, *mut i32) -> i32,
 }
 
-/// IParameterChanges vtable.
 #[repr(C)]
 pub struct IParameterChangesVtable {
     pub query_interface:
@@ -165,7 +155,6 @@ pub struct IParameterChangesVtable {
         unsafe extern "system" fn(*mut c_void, *const u32, *mut i32) -> *mut c_void,
 }
 
-/// IHostApplication vtable.
 #[repr(C)]
 pub struct IHostApplicationVtable {
     pub query_interface:
@@ -181,7 +170,6 @@ pub struct IHostApplicationVtable {
     ) -> i32,
 }
 
-/// IComponentHandler vtable.
 #[repr(C)]
 pub struct IComponentHandlerVtable {
     pub query_interface:
@@ -194,7 +182,6 @@ pub struct IComponentHandlerVtable {
     pub restart_component: unsafe extern "system" fn(*mut c_void, i32) -> i32,
 }
 
-/// IComponentHandler2 vtable.
 #[repr(C)]
 pub struct IComponentHandler2Vtable {
     pub query_interface:
@@ -207,7 +194,6 @@ pub struct IComponentHandler2Vtable {
     pub finish_group_edit: unsafe extern "system" fn(*mut c_void) -> i32,
 }
 
-/// IComponentHandler3 vtable.
 #[repr(C)]
 pub struct IComponentHandler3Vtable {
     pub query_interface:
@@ -218,7 +204,6 @@ pub struct IComponentHandler3Vtable {
         unsafe extern "system" fn(*mut c_void, *mut c_void, *const u32) -> *mut c_void,
 }
 
-/// IComponentHandlerBusActivation vtable.
 #[repr(C)]
 pub struct IComponentHandlerBusActivationVtable {
     pub query_interface:
@@ -228,7 +213,6 @@ pub struct IComponentHandlerBusActivationVtable {
     pub request_bus_activation: unsafe extern "system" fn(*mut c_void, i32, i32, i32, u8) -> i32,
 }
 
-/// IProgress vtable.
 #[repr(C)]
 pub struct IProgressVtable {
     pub query_interface:
@@ -240,7 +224,6 @@ pub struct IProgressVtable {
     pub finish: unsafe extern "system" fn(*mut c_void, u64) -> i32,
 }
 
-/// IBStream vtable.
 #[repr(C)]
 pub struct IBStreamVtable {
     pub query_interface:
@@ -254,7 +237,6 @@ pub struct IBStreamVtable {
     pub tell: unsafe extern "system" fn(*mut c_void, *mut i64) -> i32,
 }
 
-/// IConnectionPoint vtable.
 #[repr(C)]
 pub struct IConnectionPointVtable {
     pub query_interface:
@@ -266,7 +248,6 @@ pub struct IConnectionPointVtable {
     pub notify: unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32,
 }
 
-/// IMessage vtable.
 #[repr(C)]
 pub struct IMessageVtable {
     pub query_interface:
@@ -278,7 +259,6 @@ pub struct IMessageVtable {
     pub get_attributes: unsafe extern "system" fn(*mut c_void) -> *mut c_void,
 }
 
-/// IAttributeList vtable.
 #[repr(C)]
 pub struct IAttributeListVtable {
     pub query_interface:
@@ -296,7 +276,6 @@ pub struct IAttributeListVtable {
         unsafe extern "system" fn(*mut c_void, *const i8, *mut *const c_void, *mut u32) -> i32,
 }
 
-/// IUnitInfo vtable.
 #[repr(C)]
 pub struct IUnitInfoVtable {
     pub query_interface:
@@ -320,7 +299,6 @@ pub struct IUnitInfoVtable {
     pub set_unit_program_data: unsafe extern "system" fn(*mut c_void, i32, i32, *mut c_void) -> i32,
 }
 
-/// IUnitHandler vtable.
 #[repr(C)]
 pub struct IUnitHandlerVtable {
     pub query_interface:
@@ -331,7 +309,6 @@ pub struct IUnitHandlerVtable {
     pub notify_program_list_change: unsafe extern "system" fn(*mut c_void, i32, i32) -> i32,
 }
 
-/// IUnitHandler2 vtable.
 #[repr(C)]
 pub struct IUnitHandler2Vtable {
     pub query_interface:
@@ -341,7 +318,6 @@ pub struct IUnitHandler2Vtable {
     pub notify_unit_by_bus_change: unsafe extern "system" fn(*mut c_void) -> i32,
 }
 
-/// IProgramListData vtable.
 #[repr(C)]
 pub struct IProgramListDataVtable {
     pub query_interface:
@@ -353,7 +329,6 @@ pub struct IProgramListDataVtable {
     pub set_program_data: unsafe extern "system" fn(*mut c_void, i32, i32, *mut c_void) -> i32,
 }
 
-/// IUnitData vtable.
 #[repr(C)]
 pub struct IUnitDataVtable {
     pub query_interface:
@@ -365,7 +340,6 @@ pub struct IUnitDataVtable {
     pub set_unit_data: unsafe extern "system" fn(*mut c_void, i32, *mut c_void) -> i32,
 }
 
-/// IMidiMapping vtable.
 #[repr(C)]
 pub struct IMidiMappingVtable {
     pub query_interface:
@@ -376,7 +350,6 @@ pub struct IMidiMappingVtable {
         unsafe extern "system" fn(*mut c_void, i32, i16, i16, *mut u32) -> i32,
 }
 
-/// IMidiLearn vtable.
 #[repr(C)]
 pub struct IMidiLearnVtable {
     pub query_interface:
@@ -386,7 +359,6 @@ pub struct IMidiLearnVtable {
     pub on_live_midi_controller_input: unsafe extern "system" fn(*mut c_void, i32, i16, i16) -> i32,
 }
 
-/// IContextMenu vtable.
 #[repr(C)]
 pub struct IContextMenuVtable {
     pub query_interface:
@@ -400,7 +372,6 @@ pub struct IContextMenuVtable {
     pub popup: unsafe extern "system" fn(*mut c_void, i32, i32) -> i32,
 }
 
-/// IContextMenuTarget vtable.
 #[repr(C)]
 pub struct IContextMenuTargetVtable {
     pub query_interface:
@@ -410,7 +381,6 @@ pub struct IContextMenuTargetVtable {
     pub execute_menu_item: unsafe extern "system" fn(*mut c_void, i32) -> i32,
 }
 
-/// IEditController2 vtable.
 #[repr(C)]
 pub struct IEditController2Vtable {
     pub query_interface:
@@ -422,7 +392,6 @@ pub struct IEditController2Vtable {
     pub open_about_box: unsafe extern "system" fn(*mut c_void, u8) -> i32,
 }
 
-/// IEditControllerHostEditing vtable.
 #[repr(C)]
 pub struct IEditControllerHostEditingVtable {
     pub query_interface:
@@ -433,7 +402,6 @@ pub struct IEditControllerHostEditingVtable {
     pub end_edit_from_host: unsafe extern "system" fn(*mut c_void, u32) -> i32,
 }
 
-/// DataExchangeBlock for waveform/visualization data.
 #[repr(C)]
 pub struct DataExchangeBlock {
     pub data: *mut c_void,
@@ -441,10 +409,7 @@ pub struct DataExchangeBlock {
     pub block_id: u32,
 }
 
-/// IDataExchangeHandler vtable (VST 3.7+).
-///
-/// Enables direct, thread-safe data transfer from audio processor to edit controller
-/// for visualization purposes (e.g., waveform displays).
+/// VST 3.7+: thread-safe data transfer from audio processor to edit controller.
 #[repr(C)]
 pub struct IDataExchangeHandlerVtable {
     pub query_interface:
@@ -465,9 +430,7 @@ pub struct IDataExchangeHandlerVtable {
     pub free_block: unsafe extern "system" fn(*mut c_void, u32, u32, u8) -> i32,
 }
 
-/// IDataExchangeReceiver vtable (VST 3.7+).
-///
-/// Implemented by plugins to receive data blocks from the audio processor.
+/// VST 3.7+: plugin-side receiver for data blocks from the audio processor.
 #[repr(C)]
 pub struct IDataExchangeReceiverVtable {
     pub query_interface:

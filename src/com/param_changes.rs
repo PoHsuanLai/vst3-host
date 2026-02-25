@@ -1,14 +1,14 @@
 //! IParameterChanges COM implementation.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
+use super::{com_add_ref, com_release, HasRefCount};
 use crate::ffi::{IParameterChangesVtable, K_RESULT_OK};
 use crate::types::ParameterChanges;
 
 use super::param_queue::ParamValueQueueImpl;
 
-/// Provides a collection of parameter automation queues to the plugin.
 #[repr(C)]
 pub struct ParameterChangesImpl {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -20,6 +20,12 @@ pub struct ParameterChangesImpl {
 
 unsafe impl Send for ParameterChangesImpl {}
 unsafe impl Sync for ParameterChangesImpl {}
+
+impl HasRefCount for ParameterChangesImpl {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
 
 impl ParameterChangesImpl {
     pub fn from_changes(changes: &ParameterChanges) -> Box<Self> {
@@ -88,17 +94,11 @@ unsafe extern "system" fn param_changes_query_interface(
 }
 
 unsafe extern "system" fn param_changes_add_ref(this: *mut c_void) -> u32 {
-    let changes = &*(this as *const ParameterChangesImpl);
-    changes.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<ParameterChangesImpl>(this)
 }
 
 unsafe extern "system" fn param_changes_release(this: *mut c_void) -> u32 {
-    let changes = &*(this as *const ParameterChangesImpl);
-    let count = changes.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut ParameterChangesImpl);
-    }
-    count
+    com_release::<ParameterChangesImpl>(this)
 }
 
 unsafe extern "system" fn param_changes_get_parameter_count(this: *mut c_void) -> i32 {

@@ -14,10 +14,6 @@ use crate::ffi::{
 
 use super::bundle::find_library_path;
 
-/// A loaded VST3 library with access to the plugin factory.
-///
-/// This struct manages the lifetime of a loaded VST3 shared library
-/// and provides access to the plugin factory for creating instances.
 pub struct Vst3Library {
     _library: Library,
     factory: *mut c_void,
@@ -31,7 +27,6 @@ unsafe impl Send for Vst3Library {}
 unsafe impl Sync for Vst3Library {}
 
 impl Vst3Library {
-    /// Load a VST3 library from a bundle path.
     pub fn load(bundle_path: &Path) -> Result<Arc<Self>> {
         let lib_path = find_library_path(bundle_path)?;
 
@@ -106,9 +101,6 @@ impl Vst3Library {
         }
     }
 
-    /// Create an instance of a plugin class.
-    ///
-    /// This is typically called internally by `Vst3Instance::load`.
     pub(crate) fn create_instance(&self, cid: &[u8; 16], iid: &[u8; 16]) -> Result<*mut c_void> {
         let mut obj: *mut c_void = std::ptr::null_mut();
         let result = unsafe { ((*self.vtable).create_instance)(self.factory, cid, iid, &mut obj) };

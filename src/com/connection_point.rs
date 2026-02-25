@@ -1,9 +1,11 @@
 //! IConnectionPoint COM implementation.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use parking_lot::Mutex;
+
+use super::{com_add_ref, com_release, HasRefCount};
 
 type MessageCallback = Mutex<Option<Box<dyn Fn(&[u8]) + Send + Sync>>>;
 
@@ -11,7 +13,6 @@ use crate::ffi::{
     IConnectionPointVtable, IMessageVtable, IID_ICONNECTION_POINT, K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 
-/// Enables communication between processor and controller components.
 #[repr(C)]
 pub struct ConnectionPoint {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -23,6 +24,12 @@ pub struct ConnectionPoint {
 
 unsafe impl Send for ConnectionPoint {}
 unsafe impl Sync for ConnectionPoint {}
+
+impl HasRefCount for ConnectionPoint {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
 
 impl ConnectionPoint {
     pub fn new() -> Box<Self> {
@@ -99,17 +106,11 @@ unsafe extern "system" fn conn_query_interface(
 }
 
 unsafe extern "system" fn conn_add_ref(this: *mut c_void) -> u32 {
-    let point = &*(this as *const ConnectionPoint);
-    point.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<ConnectionPoint>(this)
 }
 
 unsafe extern "system" fn conn_release(this: *mut c_void) -> u32 {
-    let point = &*(this as *const ConnectionPoint);
-    let count = point.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut ConnectionPoint);
-    }
-    count
+    com_release::<ConnectionPoint>(this)
 }
 
 unsafe extern "system" fn conn_connect(this: *mut c_void, other: *mut c_void) -> i32 {

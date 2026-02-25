@@ -1,18 +1,4 @@
-//! COM interface implementations for VST3 hosting.
-//!
-//! This module provides host-side implementations of VST3 COM interfaces
-//! that are needed to interact with plugins:
-//!
-//! - [`EventList`] - Provides MIDI events to plugins
-//! - [`ParamValueQueueImpl`] - Provides parameter automation points
-//! - [`ParameterChangesImpl`] - Collection of parameter automation queues
-//! - [`HostApplication`] - Provides host information to plugins
-//! - [`ComponentHandler`] - Receives parameter edit notifications from GUI
-//! - [`BStream`] - Binary stream for state serialization
-//! - [`ConnectionPoint`] - Processor/controller communication
-//! - [`UnitHandler`] - Unit/program change notifications
-//! - [`ProgressHandler`] - Progress reporting
-//! - [`DataExchangeHandler`] - Waveform/visualization data exchange
+//! Host-side COM interface implementations for VST3 hosting.
 
 mod component_handler;
 mod connection_point;
@@ -35,3 +21,54 @@ pub use param_queue::ParamValueQueueImpl;
 pub use progress::{ProgressEvent, ProgressHandler};
 pub use stream::BStream;
 pub use unit_handler::{UnitEvent, UnitHandler};
+
+// ---------------------------------------------------------------------------
+// Shared COM helpers
+// ---------------------------------------------------------------------------
+
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Recover a pointer to `$Parent` from a COM vtable field pointer.
+///
+/// In multi-interface COM objects, secondary interfaces point to inner vtable
+/// fields rather than the struct base. This macro performs the reverse
+/// `offset_of` arithmetic to recover the parent pointer.
+macro_rules! container_of {
+    ($ptr:expr, $Parent:ty, $field:ident) => {{
+        ($ptr as *const u8).sub(std::mem::offset_of!($Parent, $field)) as *mut $Parent
+    }};
+}
+
+pub(crate) use container_of;
+
+/// Increment a COM reference count on a `#[repr(C)]` struct whose
+/// `ref_count: AtomicU32` field lives at the same offset in every COM object.
+///
+/// # Safety
+///
+/// `this` must point to a valid `T` whose `ref_count` field is an `AtomicU32`.
+pub(crate) unsafe fn com_add_ref<T: HasRefCount>(this: *mut c_void) -> u32 {
+    let obj = &*(this as *const T);
+    obj.ref_count().fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Decrement a COM reference count, dropping the `Box<T>` when it hits zero.
+///
+/// # Safety
+///
+/// `this` must point to a valid, heap-allocated `T`.
+pub(crate) unsafe fn com_release<T: HasRefCount>(this: *mut c_void) -> u32 {
+    let obj = &*(this as *const T);
+    let count = obj.ref_count().fetch_sub(1, Ordering::SeqCst) - 1;
+    if count == 0 {
+        let _ = Box::from_raw(this as *mut T);
+    }
+    count
+}
+
+/// Implemented by every `#[repr(C)]` COM struct so `com_add_ref` / `com_release`
+/// can access the refcount without knowing the concrete type's field layout.
+pub(crate) trait HasRefCount {
+    fn ref_count(&self) -> &AtomicU32;
+}

@@ -1,36 +1,30 @@
 //! IComponentHandler COM implementation.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use crossbeam_channel::{Receiver, Sender};
 
+use super::{com_add_ref, com_release, container_of, HasRefCount};
 use crate::ffi::{
     IComponentHandler2Vtable, IComponentHandler3Vtable, IComponentHandlerBusActivationVtable,
     IComponentHandlerVtable, IID_ICOMPONENT_HANDLER, IID_ICOMPONENT_HANDLER2,
     IID_ICOMPONENT_HANDLER3, IID_ICOMPONENT_HANDLER_BUS_ACTIVATION, K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 
-/// Parameter edit event from the plugin GUI.
 #[derive(Debug, Clone)]
 pub enum ParameterEditEvent {
-    /// Parameter edit started (e.g., mouse down).
     BeginEdit(u32),
-    /// Parameter value changed.
-    PerformEdit { param_id: u32, value: f64 },
-    /// Parameter edit ended (e.g., mouse up).
+    PerformEdit {
+        param_id: u32,
+        value: f64,
+    },
     EndEdit(u32),
-    /// Restart component with flags.
     RestartComponent(i32),
-    /// Mark state as dirty.
     SetDirty(bool),
-    /// Request to open editor.
     RequestOpenEditor,
-    /// Start group edit (for automation).
     StartGroupEdit,
-    /// Finish group edit.
     FinishGroupEdit,
-    /// Bus activation request.
     RequestBusActivation {
         media_type: i32,
         direction: i32,
@@ -39,7 +33,6 @@ pub enum ParameterEditEvent {
     },
 }
 
-/// Receives parameter edit notifications from the plugin GUI.
 #[repr(C)]
 pub struct ComponentHandler {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -57,8 +50,13 @@ pub struct ComponentHandler {
 unsafe impl Send for ComponentHandler {}
 unsafe impl Sync for ComponentHandler {}
 
+impl HasRefCount for ComponentHandler {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
+
 impl ComponentHandler {
-    /// Create a new component handler, returning it and a receiver for parameter edit events.
     pub fn new() -> (Box<Self>, Receiver<ParameterEditEvent>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let handler = Box::new(ComponentHandler {
@@ -126,17 +124,11 @@ unsafe extern "system" fn handler_query_interface(
 }
 
 unsafe extern "system" fn handler_add_ref(this: *mut c_void) -> u32 {
-    let handler = &*(this as *const ComponentHandler);
-    handler.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<ComponentHandler>(this)
 }
 
 unsafe extern "system" fn handler_release(this: *mut c_void) -> u32 {
-    let handler = &*(this as *const ComponentHandler);
-    let count = handler.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut ComponentHandler);
-    }
-    count
+    com_release::<ComponentHandler>(this)
 }
 
 unsafe extern "system" fn handler_begin_edit(this: *mut c_void, param_id: u32) -> i32 {
@@ -175,6 +167,10 @@ unsafe extern "system" fn handler_restart_component(this: *mut c_void, flags: i3
     K_RESULT_OK
 }
 
+// ---------------------------------------------------------------------------
+// IComponentHandler2
+// ---------------------------------------------------------------------------
+
 static COMPONENT_HANDLER2_VTABLE: IComponentHandler2Vtable = IComponentHandler2Vtable {
     query_interface: handler2_query_interface,
     add_ref: handler2_add_ref,
@@ -185,40 +181,32 @@ static COMPONENT_HANDLER2_VTABLE: IComponentHandler2Vtable = IComponentHandler2V
     finish_group_edit: handler2_finish_group_edit,
 };
 
+/// Recover the parent `ComponentHandler` from a secondary vtable pointer.
+unsafe fn handler_from_vtable2(this: *mut c_void) -> &'static ComponentHandler {
+    &*container_of!(this, ComponentHandler, vtable2)
+}
+
 unsafe extern "system" fn handler2_query_interface(
     this: *mut c_void,
     iid: *const [u8; 16],
     obj: *mut *mut c_void,
 ) -> i32 {
-    let vtable2_ptr = this as *const *const IComponentHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable2))
-        as *mut ComponentHandler;
-    handler_query_interface(handler_ptr as *mut c_void, iid, obj)
+    let parent = container_of!(this, ComponentHandler, vtable2) as *mut c_void;
+    handler_query_interface(parent, iid, obj)
 }
 
 unsafe extern "system" fn handler2_add_ref(this: *mut c_void) -> u32 {
-    let vtable2_ptr = this as *const *const IComponentHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable2))
-        as *mut ComponentHandler;
-    handler_add_ref(handler_ptr as *mut c_void)
+    let parent = container_of!(this, ComponentHandler, vtable2) as *mut c_void;
+    handler_add_ref(parent)
 }
 
 unsafe extern "system" fn handler2_release(this: *mut c_void) -> u32 {
-    let vtable2_ptr = this as *const *const IComponentHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable2))
-        as *mut ComponentHandler;
-    handler_release(handler_ptr as *mut c_void)
+    let parent = container_of!(this, ComponentHandler, vtable2) as *mut c_void;
+    handler_release(parent)
 }
 
 unsafe extern "system" fn handler2_set_dirty(this: *mut c_void, state: u8) -> i32 {
-    let vtable2_ptr = this as *const *const IComponentHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable2))
-        as *const ComponentHandler;
-    let handler = &*handler_ptr;
+    let handler = handler_from_vtable2(this);
     let _ = handler
         .event_sender
         .send(ParameterEditEvent::SetDirty(state != 0));
@@ -226,11 +214,7 @@ unsafe extern "system" fn handler2_set_dirty(this: *mut c_void, state: u8) -> i3
 }
 
 unsafe extern "system" fn handler2_request_open_editor(this: *mut c_void, _name: *const i8) -> i32 {
-    let vtable2_ptr = this as *const *const IComponentHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable2))
-        as *const ComponentHandler;
-    let handler = &*handler_ptr;
+    let handler = handler_from_vtable2(this);
     let _ = handler
         .event_sender
         .send(ParameterEditEvent::RequestOpenEditor);
@@ -238,11 +222,7 @@ unsafe extern "system" fn handler2_request_open_editor(this: *mut c_void, _name:
 }
 
 unsafe extern "system" fn handler2_start_group_edit(this: *mut c_void) -> i32 {
-    let vtable2_ptr = this as *const *const IComponentHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable2))
-        as *const ComponentHandler;
-    let handler = &*handler_ptr;
+    let handler = handler_from_vtable2(this);
     let _ = handler
         .event_sender
         .send(ParameterEditEvent::StartGroupEdit);
@@ -250,16 +230,16 @@ unsafe extern "system" fn handler2_start_group_edit(this: *mut c_void) -> i32 {
 }
 
 unsafe extern "system" fn handler2_finish_group_edit(this: *mut c_void) -> i32 {
-    let vtable2_ptr = this as *const *const IComponentHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable2))
-        as *const ComponentHandler;
-    let handler = &*handler_ptr;
+    let handler = handler_from_vtable2(this);
     let _ = handler
         .event_sender
         .send(ParameterEditEvent::FinishGroupEdit);
     K_RESULT_OK
 }
+
+// ---------------------------------------------------------------------------
+// IComponentHandler3
+// ---------------------------------------------------------------------------
 
 static COMPONENT_HANDLER3_VTABLE: IComponentHandler3Vtable = IComponentHandler3Vtable {
     query_interface: handler3_query_interface,
@@ -273,27 +253,18 @@ unsafe extern "system" fn handler3_query_interface(
     iid: *const [u8; 16],
     obj: *mut *mut c_void,
 ) -> i32 {
-    let vtable3_ptr = this as *const *const IComponentHandler3Vtable;
-    let handler_ptr = (vtable3_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable3))
-        as *mut ComponentHandler;
-    handler_query_interface(handler_ptr as *mut c_void, iid, obj)
+    let parent = container_of!(this, ComponentHandler, vtable3) as *mut c_void;
+    handler_query_interface(parent, iid, obj)
 }
 
 unsafe extern "system" fn handler3_add_ref(this: *mut c_void) -> u32 {
-    let vtable3_ptr = this as *const *const IComponentHandler3Vtable;
-    let handler_ptr = (vtable3_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable3))
-        as *mut ComponentHandler;
-    handler_add_ref(handler_ptr as *mut c_void)
+    let parent = container_of!(this, ComponentHandler, vtable3) as *mut c_void;
+    handler_add_ref(parent)
 }
 
 unsafe extern "system" fn handler3_release(this: *mut c_void) -> u32 {
-    let vtable3_ptr = this as *const *const IComponentHandler3Vtable;
-    let handler_ptr = (vtable3_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable3))
-        as *mut ComponentHandler;
-    handler_release(handler_ptr as *mut c_void)
+    let parent = container_of!(this, ComponentHandler, vtable3) as *mut c_void;
+    handler_release(parent)
 }
 
 unsafe extern "system" fn handler3_create_context_menu(
@@ -303,6 +274,10 @@ unsafe extern "system" fn handler3_create_context_menu(
 ) -> *mut c_void {
     std::ptr::null_mut()
 }
+
+// ---------------------------------------------------------------------------
+// IComponentHandlerBusActivation
+// ---------------------------------------------------------------------------
 
 static COMPONENT_HANDLER_BUS_ACTIVATION_VTABLE: IComponentHandlerBusActivationVtable =
     IComponentHandlerBusActivationVtable {
@@ -317,27 +292,18 @@ unsafe extern "system" fn handler_bus_query_interface(
     iid: *const [u8; 16],
     obj: *mut *mut c_void,
 ) -> i32 {
-    let vtable_bus_ptr = this as *const *const IComponentHandlerBusActivationVtable;
-    let handler_ptr = (vtable_bus_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable_bus))
-        as *mut ComponentHandler;
-    handler_query_interface(handler_ptr as *mut c_void, iid, obj)
+    let parent = container_of!(this, ComponentHandler, vtable_bus) as *mut c_void;
+    handler_query_interface(parent, iid, obj)
 }
 
 unsafe extern "system" fn handler_bus_add_ref(this: *mut c_void) -> u32 {
-    let vtable_bus_ptr = this as *const *const IComponentHandlerBusActivationVtable;
-    let handler_ptr = (vtable_bus_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable_bus))
-        as *mut ComponentHandler;
-    handler_add_ref(handler_ptr as *mut c_void)
+    let parent = container_of!(this, ComponentHandler, vtable_bus) as *mut c_void;
+    handler_add_ref(parent)
 }
 
 unsafe extern "system" fn handler_bus_release(this: *mut c_void) -> u32 {
-    let vtable_bus_ptr = this as *const *const IComponentHandlerBusActivationVtable;
-    let handler_ptr = (vtable_bus_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable_bus))
-        as *mut ComponentHandler;
-    handler_release(handler_ptr as *mut c_void)
+    let parent = container_of!(this, ComponentHandler, vtable_bus) as *mut c_void;
+    handler_release(parent)
 }
 
 unsafe extern "system" fn handler_bus_request_activation(
@@ -347,11 +313,7 @@ unsafe extern "system" fn handler_bus_request_activation(
     index: i32,
     state: u8,
 ) -> i32 {
-    let vtable_bus_ptr = this as *const *const IComponentHandlerBusActivationVtable;
-    let handler_ptr = (vtable_bus_ptr as *const u8)
-        .sub(std::mem::offset_of!(ComponentHandler, vtable_bus))
-        as *const ComponentHandler;
-    let handler = &*handler_ptr;
+    let handler = &*container_of!(this, ComponentHandler, vtable_bus);
     let _ = handler
         .event_sender
         .send(ParameterEditEvent::RequestBusActivation {

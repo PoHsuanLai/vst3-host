@@ -1,54 +1,111 @@
 //! Audio buffer types for plugin processing.
 
+use std::ffi::c_void;
+
 use crate::ffi::{K_SAMPLE_32, K_SAMPLE_64};
 
-/// Trait for supported audio sample types.
+/// Marker trait for VST3-compatible sample types (f32, f64).
 ///
-/// Implemented for `f32` and `f64` to support both 32-bit and 64-bit processing.
+/// The `prepare_ffi_buffers` method lets generic code (`process<T>`) fill the
+/// correct pre-allocated pointer arrays without runtime branching in the
+/// monomorphised output — the compiler generates one version per concrete type.
 pub trait Sample: Copy + Default + Send + 'static {
-    /// The VST3 symbolic sample size constant for this type.
     const VST3_SYMBOLIC_SIZE: i32;
+
+    fn prepare_ffi_buffers(
+        ptrs_f32: &mut BufferPtrs<f32>,
+        ptrs_f64: &mut BufferPtrs<f64>,
+        inputs: &[&[Self]],
+        outputs: &mut [&mut [Self]],
+    ) -> (*mut *mut c_void, *mut *mut c_void);
 }
 
 impl Sample for f32 {
     const VST3_SYMBOLIC_SIZE: i32 = K_SAMPLE_32;
+
+    fn prepare_ffi_buffers(
+        ptrs_f32: &mut BufferPtrs<f32>,
+        _ptrs_f64: &mut BufferPtrs<f64>,
+        inputs: &[&[Self]],
+        outputs: &mut [&mut [Self]],
+    ) -> (*mut *mut c_void, *mut *mut c_void) {
+        ptrs_f32.prepare(inputs, outputs)
+    }
 }
 
 impl Sample for f64 {
     const VST3_SYMBOLIC_SIZE: i32 = K_SAMPLE_64;
+
+    fn prepare_ffi_buffers(
+        _ptrs_f32: &mut BufferPtrs<f32>,
+        ptrs_f64: &mut BufferPtrs<f64>,
+        inputs: &[&[Self]],
+        outputs: &mut [&mut [Self]],
+    ) -> (*mut *mut c_void, *mut *mut c_void) {
+        ptrs_f64.prepare(inputs, outputs)
+    }
 }
 
-/// Audio buffer for plugin processing.
-///
-/// This struct provides a view into input and output audio buffers.
-/// The lifetime `'a` ensures the buffers remain valid during processing.
-///
-/// # Example
-///
-/// ```ignore
-/// let inputs: [&[f32]; 2] = [&input_left, &input_right];
-/// let mut outputs: [&mut [f32]; 2] = [&mut output_left, &mut output_right];
-///
-/// let buffer = AudioBuffer {
-///     inputs: &inputs,
-///     outputs: &mut outputs,
-///     num_samples: 512,
-///     sample_rate: 44100.0,
-/// };
-/// ```
+pub struct BufferPtrs<T> {
+    pub input: Vec<*mut T>,
+    pub output: Vec<*mut T>,
+}
+
+unsafe impl<T> Send for BufferPtrs<T> {}
+unsafe impl<T> Sync for BufferPtrs<T> {}
+
+impl<T> BufferPtrs<T> {
+    pub fn new(num_inputs: usize, num_outputs: usize) -> Self {
+        Self {
+            input: vec![std::ptr::null_mut(); num_inputs],
+            output: vec![std::ptr::null_mut(); num_outputs],
+        }
+    }
+
+    pub fn resize_inputs(&mut self, count: usize) {
+        self.input = vec![std::ptr::null_mut(); count];
+    }
+
+    pub fn resize_outputs(&mut self, count: usize) {
+        self.output = vec![std::ptr::null_mut(); count];
+    }
+
+    /// Fill pointer arrays from buffer slices, return raw `*mut *mut c_void` for FFI.
+    ///
+    /// Input slices are cast to `*mut T` to satisfy the VST3 C API which uses
+    /// `*mut *mut c_void` for both inputs and outputs. Well-behaved plugins
+    /// must not mutate input buffers.
+    pub fn prepare(
+        &mut self,
+        inputs: &[&[T]],
+        outputs: &mut [&mut [T]],
+    ) -> (*mut *mut c_void, *mut *mut c_void) {
+        for (i, input_slice) in inputs.iter().enumerate() {
+            if i < self.input.len() {
+                self.input[i] = input_slice.as_ptr() as *mut T;
+            }
+        }
+        for (i, output_slice) in outputs.iter_mut().enumerate() {
+            if i < self.output.len() {
+                self.output[i] = output_slice.as_mut_ptr();
+            }
+        }
+        (
+            self.input.as_mut_ptr() as *mut *mut c_void,
+            self.output.as_mut_ptr() as *mut *mut c_void,
+        )
+    }
+}
+
 pub struct AudioBuffer<'a, T: Sample = f32> {
-    /// Input channel buffers (read-only).
     pub inputs: &'a [&'a [T]],
-    /// Output channel buffers (writable).
     pub outputs: &'a mut [&'a mut [T]],
-    /// Number of samples in each buffer.
     pub num_samples: usize,
-    /// Sample rate in Hz.
+    /// Hz
     pub sample_rate: f64,
 }
 
 impl<'a, T: Sample> AudioBuffer<'a, T> {
-    /// Create a new audio buffer.
     pub fn new(
         inputs: &'a [&'a [T]],
         outputs: &'a mut [&'a mut [T]],
@@ -63,17 +120,14 @@ impl<'a, T: Sample> AudioBuffer<'a, T> {
         }
     }
 
-    /// Get the number of input channels.
     pub fn num_inputs(&self) -> usize {
         self.inputs.len()
     }
 
-    /// Get the number of output channels.
     pub fn num_outputs(&self) -> usize {
         self.outputs.len()
     }
 
-    /// Clear all output buffers to zero.
     pub fn clear_outputs(&mut self) {
         for output in self.outputs.iter_mut() {
             output.fill(T::default());

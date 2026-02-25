@@ -1,27 +1,23 @@
 //! IUnitHandler COM implementation.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use crossbeam_channel::{Receiver, Sender};
 
+use super::{com_add_ref, com_release, container_of, HasRefCount};
 use crate::ffi::{
     IUnitHandler2Vtable, IUnitHandlerVtable, IID_IUNIT_HANDLER, IID_IUNIT_HANDLER2,
     K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 
-/// Unit-related event from the plugin.
 #[derive(Debug, Clone)]
 pub enum UnitEvent {
-    /// Unit selection changed.
     UnitSelected(i32),
-    /// Program list changed (list_id, program_index).
     ProgramListChanged { list_id: i32, program_index: i32 },
-    /// Unit by bus info changed.
     UnitByBusChanged,
 }
 
-/// Receives unit change notifications from the plugin.
 #[repr(C)]
 pub struct UnitHandler {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -35,8 +31,13 @@ pub struct UnitHandler {
 unsafe impl Send for UnitHandler {}
 unsafe impl Sync for UnitHandler {}
 
+impl HasRefCount for UnitHandler {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
+
 impl UnitHandler {
-    /// Create a new unit handler, returning it and a receiver for unit events.
     pub fn new() -> (Box<Self>, Receiver<UnitEvent>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let handler = Box::new(UnitHandler {
@@ -86,17 +87,11 @@ unsafe extern "system" fn unit_handler_query_interface(
 }
 
 unsafe extern "system" fn unit_handler_add_ref(this: *mut c_void) -> u32 {
-    let handler = &*(this as *const UnitHandler);
-    handler.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<UnitHandler>(this)
 }
 
 unsafe extern "system" fn unit_handler_release(this: *mut c_void) -> u32 {
-    let handler = &*(this as *const UnitHandler);
-    let count = handler.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut UnitHandler);
-    }
-    count
+    com_release::<UnitHandler>(this)
 }
 
 unsafe extern "system" fn unit_handler_notify_selection(this: *mut c_void, unit_id: i32) -> i32 {
@@ -118,6 +113,10 @@ unsafe extern "system" fn unit_handler_notify_program_list(
     K_RESULT_OK
 }
 
+// ---------------------------------------------------------------------------
+// IUnitHandler2
+// ---------------------------------------------------------------------------
+
 static UNIT_HANDLER2_VTABLE: IUnitHandler2Vtable = IUnitHandler2Vtable {
     query_interface: unit_handler2_query_interface,
     add_ref: unit_handler2_add_ref,
@@ -130,31 +129,22 @@ unsafe extern "system" fn unit_handler2_query_interface(
     iid: *const [u8; 16],
     obj: *mut *mut c_void,
 ) -> i32 {
-    let vtable2_ptr = this as *const *const IUnitHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8).sub(std::mem::offset_of!(UnitHandler, vtable2))
-        as *mut UnitHandler;
-    unit_handler_query_interface(handler_ptr as *mut c_void, iid, obj)
+    let parent = container_of!(this, UnitHandler, vtable2) as *mut c_void;
+    unit_handler_query_interface(parent, iid, obj)
 }
 
 unsafe extern "system" fn unit_handler2_add_ref(this: *mut c_void) -> u32 {
-    let vtable2_ptr = this as *const *const IUnitHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8).sub(std::mem::offset_of!(UnitHandler, vtable2))
-        as *mut UnitHandler;
-    unit_handler_add_ref(handler_ptr as *mut c_void)
+    let parent = container_of!(this, UnitHandler, vtable2) as *mut c_void;
+    unit_handler_add_ref(parent)
 }
 
 unsafe extern "system" fn unit_handler2_release(this: *mut c_void) -> u32 {
-    let vtable2_ptr = this as *const *const IUnitHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8).sub(std::mem::offset_of!(UnitHandler, vtable2))
-        as *mut UnitHandler;
-    unit_handler_release(handler_ptr as *mut c_void)
+    let parent = container_of!(this, UnitHandler, vtable2) as *mut c_void;
+    unit_handler_release(parent)
 }
 
 unsafe extern "system" fn unit_handler2_notify_by_bus(this: *mut c_void) -> i32 {
-    let vtable2_ptr = this as *const *const IUnitHandler2Vtable;
-    let handler_ptr = (vtable2_ptr as *const u8).sub(std::mem::offset_of!(UnitHandler, vtable2))
-        as *const UnitHandler;
-    let handler = &*handler_ptr;
+    let handler = &*container_of!(this, UnitHandler, vtable2);
     let _ = handler.event_sender.send(UnitEvent::UnitByBusChanged);
     K_RESULT_OK
 }

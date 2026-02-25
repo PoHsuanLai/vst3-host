@@ -7,12 +7,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 
+use super::{com_add_ref, com_release, HasRefCount};
+
 use crate::ffi::{
     DataExchangeBlock, IDataExchangeHandlerVtable, IID_IDATA_EXCHANGE_HANDLER, K_NOT_IMPLEMENTED,
     K_RESULT_OK,
 };
 
-/// Data block received from the audio processor.
 #[derive(Debug, Clone)]
 pub struct DataBlock {
     pub user_context_id: u32,
@@ -47,8 +48,7 @@ impl Queue {
     }
 }
 
-/// Enables direct, thread-safe data transfer from audio processor to edit controller
-/// for visualization purposes (e.g., waveform displays, spectrum analyzers).
+/// Thread-safe data transfer from audio processor to edit controller for visualization.
 #[repr(C)]
 pub struct DataExchangeHandler {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -62,8 +62,13 @@ pub struct DataExchangeHandler {
 unsafe impl Send for DataExchangeHandler {}
 unsafe impl Sync for DataExchangeHandler {}
 
+impl HasRefCount for DataExchangeHandler {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
+
 impl DataExchangeHandler {
-    /// Create a new data exchange handler, returning it and a receiver for data blocks.
     pub fn new() -> (Box<Self>, Receiver<DataBlock>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let handler = Box::new(DataExchangeHandler {
@@ -107,17 +112,11 @@ unsafe extern "system" fn handler_query_interface(
 }
 
 unsafe extern "system" fn handler_add_ref(this: *mut c_void) -> u32 {
-    let handler = &*(this as *const DataExchangeHandler);
-    handler.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<DataExchangeHandler>(this)
 }
 
 unsafe extern "system" fn handler_release(this: *mut c_void) -> u32 {
-    let handler = &*(this as *const DataExchangeHandler);
-    let count = handler.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut DataExchangeHandler);
-    }
-    count
+    com_release::<DataExchangeHandler>(this)
 }
 
 unsafe extern "system" fn handler_open_queue(

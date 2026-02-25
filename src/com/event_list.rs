@@ -1,11 +1,12 @@
 //! IEventList COM implementation.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
+use super::{com_add_ref, com_release, HasRefCount};
 use crate::ffi::{
     DataEvent, IEventListVtable, NoteExpressionValueEvent, NoteOffEvent, NoteOnEvent,
-    PolyPressureEvent, Vst3Event, IID_IEVENT_LIST, K_RESULT_OK,
+    PolyPressureEvent, Vst3Event, IID_IEVENT_LIST, K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 use crate::types::{
     vst3_to_midi_event, vst3_to_note_expression, MidiEvent, NoteExpressionValue, Vst3MidiEvent,
@@ -13,10 +14,7 @@ use crate::types::{
 
 use smallvec::SmallVec;
 
-/// IEventList implementation for providing MIDI events to plugins.
-///
-/// Designed for real-time safety: pre-allocated vector is reused across
-/// process calls with no heap allocations during normal operation.
+/// Pre-allocated vector is reused across process calls (no heap allocs in steady state).
 #[repr(C)]
 pub struct EventList {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -28,6 +26,12 @@ pub struct EventList {
 unsafe impl Send for EventList {}
 unsafe impl Sync for EventList {}
 
+impl HasRefCount for EventList {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
+
 impl EventList {
     pub fn new() -> Box<Self> {
         Box::new(EventList {
@@ -37,14 +41,12 @@ impl EventList {
         })
     }
 
-    /// Clear and repopulate from the given MIDI events, reusing the existing allocation.
     pub fn update_from_midi<E: Vst3MidiEvent>(&mut self, midi_events: &[E]) {
         self.events.clear();
         self.events
             .extend(midi_events.iter().filter_map(|e| e.to_vst3_event()));
     }
 
-    /// Update from MIDI events and note expressions, sorted by sample offset.
     pub fn update_from_midi_and_expression<E: Vst3MidiEvent>(
         &mut self,
         midi_events: &[E],
@@ -59,7 +61,6 @@ impl EventList {
         self.events.sort_by_key(|e| e.sample_offset());
     }
 
-    /// Clear all events, keeping allocation for reuse.
     pub fn clear(&mut self) {
         self.events.clear();
     }
@@ -72,7 +73,6 @@ impl EventList {
         self.events.is_empty()
     }
 
-    /// Convert all events to MIDI events (note expression events are skipped).
     pub fn to_midi_events(&self) -> SmallVec<[MidiEvent; 64]> {
         self.events.iter().filter_map(vst3_to_midi_event).collect()
     }
@@ -119,22 +119,16 @@ unsafe extern "system" fn event_list_query_interface(
         K_RESULT_OK
     } else {
         *obj = std::ptr::null_mut();
-        -1 // E_NOINTERFACE
+        K_NOT_IMPLEMENTED
     }
 }
 
 unsafe extern "system" fn event_list_add_ref(this: *mut c_void) -> u32 {
-    let event_list = &*(this as *const EventList);
-    event_list.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<EventList>(this)
 }
 
 unsafe extern "system" fn event_list_release(this: *mut c_void) -> u32 {
-    let event_list = &*(this as *const EventList);
-    let count = event_list.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut EventList);
-    }
-    count
+    com_release::<EventList>(this)
 }
 
 unsafe extern "system" fn event_list_get_event_count(this: *mut c_void) -> i32 {
@@ -148,11 +142,11 @@ unsafe extern "system" fn event_list_get_event(
     event: *mut c_void,
 ) -> i32 {
     if event.is_null() {
-        return -1;
+        return K_NOT_IMPLEMENTED;
     }
     let event_list = &*(this as *const EventList);
     if index < 0 || index >= event_list.events.len() as i32 {
-        return -1;
+        return K_NOT_IMPLEMENTED;
     }
 
     match &event_list.events[index as usize] {
@@ -198,7 +192,7 @@ unsafe extern "system" fn event_list_get_event(
 
 unsafe extern "system" fn event_list_add_event(this: *mut c_void, event: *const c_void) -> i32 {
     if event.is_null() {
-        return -1;
+        return K_NOT_IMPLEMENTED;
     }
     let event_list = &mut *(this as *mut EventList);
     let header = &*(event as *const crate::ffi::EventHeader);
@@ -224,7 +218,7 @@ unsafe extern "system" fn event_list_add_event(this: *mut c_void, event: *const 
             let expr = &*(event as *const NoteExpressionValueEvent);
             event_list.events.push(Vst3Event::NoteExpression(*expr));
         }
-        _ => return -1, // Unknown event type
+        _ => return K_NOT_IMPLEMENTED,
     }
 
     K_RESULT_OK

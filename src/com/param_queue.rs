@@ -1,12 +1,12 @@
 //! IParamValueQueue COM implementation.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
+use super::{com_add_ref, com_release, HasRefCount};
 use crate::ffi::{IParamValueQueueVtable, K_RESULT_OK};
 use crate::types::{ParameterPoint, ParameterQueue};
 
-/// Provides parameter automation points for a single parameter.
 #[repr(C)]
 pub struct ParamValueQueueImpl {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -18,6 +18,12 @@ pub struct ParamValueQueueImpl {
 
 unsafe impl Send for ParamValueQueueImpl {}
 unsafe impl Sync for ParamValueQueueImpl {}
+
+impl HasRefCount for ParamValueQueueImpl {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
 
 impl ParamValueQueueImpl {
     pub fn from_queue(queue: &ParameterQueue) -> Box<Self> {
@@ -80,17 +86,11 @@ unsafe extern "system" fn param_queue_query_interface(
 }
 
 unsafe extern "system" fn param_queue_add_ref(this: *mut c_void) -> u32 {
-    let queue = &*(this as *const ParamValueQueueImpl);
-    queue.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<ParamValueQueueImpl>(this)
 }
 
 unsafe extern "system" fn param_queue_release(this: *mut c_void) -> u32 {
-    let queue = &*(this as *const ParamValueQueueImpl);
-    let count = queue.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut ParamValueQueueImpl);
-    }
-    count
+    com_release::<ParamValueQueueImpl>(this)
 }
 
 unsafe extern "system" fn param_queue_get_parameter_id(this: *mut c_void) -> u32 {

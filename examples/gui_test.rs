@@ -108,7 +108,7 @@ impl ApplicationHandler for App {
                         // Extract the native view pointer
                         let parent: *mut c_void = match raw_handle {
                             #[cfg(target_os = "macos")]
-                            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut c_void,
+                            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
                             #[cfg(target_os = "windows")]
                             RawWindowHandle::Win32(h) => h.hwnd.get() as *mut c_void,
                             #[cfg(target_os = "linux")]

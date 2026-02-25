@@ -4,12 +4,6 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{LoadStage, Vst3Error};
 
-/// Find the actual library file within a .vst3 bundle.
-///
-/// VST3 plugins are distributed as bundles with platform-specific paths:
-/// - macOS: `Contents/MacOS/{name}`
-/// - Linux: `Contents/x86_64-linux/{name}.so`
-/// - Windows: `Contents/x86_64-win/{name}.vst3`
 pub fn find_library_path(bundle_path: &Path) -> Result<PathBuf, Vst3Error> {
     #[cfg(target_os = "macos")]
     {

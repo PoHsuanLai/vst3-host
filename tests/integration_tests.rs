@@ -18,12 +18,9 @@ const VITAL: &str = "/Library/Audio/Plug-Ins/VST3/Vital.vst3";
 const DEXED: &str = "/Library/Audio/Plug-Ins/VST3/Dexed.vst3";
 
 fn find_available_plugin() -> Option<&'static str> {
-    for path in [TAL_NOISEMAKER, SURGE_XT, VITAL, DEXED] {
-        if Path::new(path).exists() {
-            return Some(path);
-        }
-    }
-    None
+    [TAL_NOISEMAKER, SURGE_XT, VITAL, DEXED]
+        .into_iter()
+        .find(|path| Path::new(path).exists())
 }
 
 #[test]
@@ -134,8 +131,7 @@ fn test_process_with_midi() {
 
     let _output_events = plugin.process(&mut buffer, &midi, None, &[], &transport);
 
-    // Drop buffer first to release borrow on output slices
-    drop(buffer);
+    // buffer goes out of scope here, releasing borrow on output slices
     let has_output = output_left.iter().any(|&s| s.abs() > 0.0001);
     println!("Plugin produced audio: {}", has_output);
 }

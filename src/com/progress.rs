@@ -5,24 +5,26 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::ffi::{IProgressVtable, IID_IPROGRESS, K_NOT_IMPLEMENTED, K_RESULT_OK};
+use super::{com_add_ref, com_release, HasRefCount};
+use crate::ffi::{utf16_to_string, IProgressVtable, IID_IPROGRESS, K_NOT_IMPLEMENTED, K_RESULT_OK};
 
-/// Progress event from the plugin.
 #[derive(Debug, Clone)]
 pub enum ProgressEvent {
-    /// Progress started.
     Started {
         id: u64,
         progress_type: u32,
         description: String,
     },
-    /// Progress updated (0.0 to 1.0).
-    Updated { id: u64, progress: f64 },
-    /// Progress finished.
-    Finished { id: u64 },
+    /// 0.0 to 1.0.
+    Updated {
+        id: u64,
+        progress: f64,
+    },
+    Finished {
+        id: u64,
+    },
 }
 
-/// Handles progress reporting from plugins during long operations.
 #[repr(C)]
 pub struct ProgressHandler {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -35,8 +37,13 @@ pub struct ProgressHandler {
 unsafe impl Send for ProgressHandler {}
 unsafe impl Sync for ProgressHandler {}
 
+impl HasRefCount for ProgressHandler {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
+
 impl ProgressHandler {
-    /// Create a new progress handler, returning it and a receiver for progress events.
     pub fn new() -> (Box<Self>, Receiver<ProgressEvent>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let handler = Box::new(ProgressHandler {
@@ -78,17 +85,11 @@ unsafe extern "system" fn progress_query_interface(
 }
 
 unsafe extern "system" fn progress_add_ref(this: *mut c_void) -> u32 {
-    let handler = &*(this as *const ProgressHandler);
-    handler.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<ProgressHandler>(this)
 }
 
 unsafe extern "system" fn progress_release(this: *mut c_void) -> u32 {
-    let handler = &*(this as *const ProgressHandler);
-    let count = handler.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut ProgressHandler);
-    }
-    count
+    com_release::<ProgressHandler>(this)
 }
 
 unsafe extern "system" fn progress_start(
@@ -104,13 +105,13 @@ unsafe extern "system" fn progress_start(
     let desc = if description.is_null() {
         String::new()
     } else {
-        let mut chars = Vec::new();
+        let mut len = 0;
         let mut ptr = description;
         while *ptr != 0 {
-            chars.push(*ptr);
+            len += 1;
             ptr = ptr.add(1);
         }
-        String::from_utf16_lossy(&chars)
+        utf16_to_string(std::slice::from_raw_parts(description, len))
     };
 
     let _ = handler.event_sender.send(ProgressEvent::Started {

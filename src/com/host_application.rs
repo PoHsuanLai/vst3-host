@@ -1,14 +1,14 @@
 //! IHostApplication COM implementation.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
+use super::{com_add_ref, com_release, HasRefCount};
 use crate::ffi::{
     IAttributeListVtable, IHostApplicationVtable, IMessageVtable, IID_IATTRIBUTE_LIST,
     IID_IHOST_APPLICATION, IID_IMESSAGE, K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 
-/// Provides host information to plugins during initialization.
 #[repr(C)]
 pub struct HostApplication {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -19,6 +19,12 @@ pub struct HostApplication {
 
 unsafe impl Send for HostApplication {}
 unsafe impl Sync for HostApplication {}
+
+impl HasRefCount for HostApplication {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
 
 impl HostApplication {
     pub fn new(name: &str) -> Box<Self> {
@@ -63,17 +69,11 @@ unsafe extern "system" fn host_app_query_interface(
 }
 
 unsafe extern "system" fn host_app_add_ref(this: *mut c_void) -> u32 {
-    let app = &*(this as *const HostApplication);
-    app.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<HostApplication>(this)
 }
 
 unsafe extern "system" fn host_app_release(this: *mut c_void) -> u32 {
-    let app = &*(this as *const HostApplication);
-    let count = app.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut HostApplication);
-    }
-    count
+    com_release::<HostApplication>(this)
 }
 
 unsafe extern "system" fn host_app_get_name(this: *mut c_void, name: *mut [u16; 128]) -> i32 {
@@ -107,7 +107,6 @@ unsafe extern "system" fn host_app_create_instance(
     K_NOT_IMPLEMENTED
 }
 
-/// IMessage implementation for processor/controller communication.
 #[repr(C)]
 pub struct Message {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -119,6 +118,12 @@ pub struct Message {
 
 unsafe impl Send for Message {}
 unsafe impl Sync for Message {}
+
+impl HasRefCount for Message {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
 
 impl Message {
     pub fn new() -> Box<Self> {
@@ -167,17 +172,11 @@ unsafe extern "system" fn message_query_interface(
 }
 
 unsafe extern "system" fn message_add_ref(this: *mut c_void) -> u32 {
-    let msg = &*(this as *const Message);
-    msg.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<Message>(this)
 }
 
 unsafe extern "system" fn message_release(this: *mut c_void) -> u32 {
-    let msg = &*(this as *const Message);
-    let count = msg.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut Message);
-    }
-    count
+    com_release::<Message>(this)
 }
 
 unsafe extern "system" fn message_get_id(this: *mut c_void) -> *const i8 {
@@ -215,7 +214,6 @@ enum AttributeValue {
     Binary(Vec<u8>),
 }
 
-/// IAttributeList implementation for key-value attribute storage.
 #[repr(C)]
 pub struct AttributeList {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -226,6 +224,12 @@ pub struct AttributeList {
 
 unsafe impl Send for AttributeList {}
 unsafe impl Sync for AttributeList {}
+
+impl HasRefCount for AttributeList {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
 
 impl AttributeList {
     pub fn new() -> Box<Self> {
@@ -281,17 +285,11 @@ unsafe extern "system" fn attr_query_interface(
 }
 
 unsafe extern "system" fn attr_add_ref(this: *mut c_void) -> u32 {
-    let attrs = &*(this as *const AttributeList);
-    attrs.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<AttributeList>(this)
 }
 
 unsafe extern "system" fn attr_release(this: *mut c_void) -> u32 {
-    let attrs = &*(this as *const AttributeList);
-    let count = attrs.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut AttributeList);
-    }
-    count
+    com_release::<AttributeList>(this)
 }
 
 fn key_from_ptr(key: *const i8) -> Option<String> {

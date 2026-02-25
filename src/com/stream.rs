@@ -2,17 +2,16 @@
 
 use std::ffi::c_void;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use parking_lot::Mutex;
 
+use super::{com_add_ref, com_release, HasRefCount};
 use crate::ffi::{
     IBStreamVtable, IID_IBSTREAM, K_IB_SEEK_CUR, K_IB_SEEK_END, K_IB_SEEK_SET, K_NOT_IMPLEMENTED,
     K_RESULT_OK,
 };
 
-/// Wraps a byte buffer and implements the VST3 IBStream interface
-/// for reading/writing plugin state.
 #[repr(C)]
 pub struct BStream {
     #[allow(dead_code)] // Accessed via raw pointer in COM vtable
@@ -23,6 +22,12 @@ pub struct BStream {
 
 unsafe impl Send for BStream {}
 unsafe impl Sync for BStream {}
+
+impl HasRefCount for BStream {
+    fn ref_count(&self) -> &AtomicU32 {
+        &self.ref_count
+    }
+}
 
 impl BStream {
     pub fn new() -> Box<Self> {
@@ -90,17 +95,11 @@ unsafe extern "system" fn stream_query_interface(
 }
 
 unsafe extern "system" fn stream_add_ref(this: *mut c_void) -> u32 {
-    let stream = &*(this as *const BStream);
-    stream.ref_count.fetch_add(1, Ordering::SeqCst) + 1
+    com_add_ref::<BStream>(this)
 }
 
 unsafe extern "system" fn stream_release(this: *mut c_void) -> u32 {
-    let stream = &*(this as *const BStream);
-    let count = stream.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    if count == 0 {
-        let _ = Box::from_raw(this as *mut BStream);
-    }
-    count
+    com_release::<BStream>(this)
 }
 
 unsafe extern "system" fn stream_read(

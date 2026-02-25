@@ -4,7 +4,6 @@
 
 use std::ffi::c_void;
 
-/// Factory information returned by IPluginFactory::getFactoryInfo.
 #[repr(C)]
 #[derive(Clone)]
 pub struct PFactoryInfo {
@@ -25,7 +24,6 @@ impl Default for PFactoryInfo {
     }
 }
 
-/// Class information returned by IPluginFactory::getClassInfo.
 #[repr(C)]
 #[derive(Clone)]
 pub struct PClassInfo {
@@ -46,7 +44,6 @@ impl Default for PClassInfo {
     }
 }
 
-/// Process setup information passed to IAudioProcessor::setupProcessing.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ProcessSetup {
@@ -56,7 +53,6 @@ pub struct ProcessSetup {
     pub sample_rate: f64,
 }
 
-/// Audio bus buffer descriptor.
 #[repr(C)]
 pub struct AudioBusBuffers {
     pub num_channels: i32,
@@ -64,21 +60,14 @@ pub struct AudioBusBuffers {
     pub buffers: *mut *mut c_void,
 }
 
-/// Bus information returned by IComponent::getBusInfo.
 #[repr(C)]
 #[derive(Clone)]
 pub struct BusInfo {
-    /// Media type (K_AUDIO or K_EVENT).
     pub media_type: i32,
-    /// Direction (K_INPUT or K_OUTPUT).
     pub direction: i32,
-    /// Number of channels (for audio buses).
     pub channel_count: i32,
-    /// Bus name (UTF-16, null-terminated).
     pub name: [u16; 128],
-    /// Bus type (main or aux).
     pub bus_type: i32,
-    /// Flags.
     pub flags: u32,
 }
 
@@ -101,7 +90,6 @@ impl BusInfo {
     }
 }
 
-/// Main processing data passed to IAudioProcessor::process.
 #[repr(C)]
 pub struct ProcessData {
     pub process_mode: i32,
@@ -118,40 +106,31 @@ pub struct ProcessData {
     pub context: *mut ProcessContext,
 }
 
-/// Transport and timing context for processing.
+/// Validity of optional fields is indicated by K_*_VALID flags in `state`.
 #[repr(C)]
 pub struct ProcessContext {
-    /// Transport and validity state flags.
     pub state: u32,
-    /// Current sample rate.
     pub sample_rate: f64,
-    /// Project time in samples (always valid).
     pub project_time_samples: i64,
-    /// System time in nanoseconds (optional).
+    /// Nanoseconds.
     pub system_time: i64,
-    /// Continuous time in samples without loop (optional).
     pub continuous_time_samples: i64,
-    /// Musical position in quarter notes (optional).
+    /// Quarter notes.
     pub project_time_music: f64,
-    /// Last bar start position in quarter notes (optional).
+    /// Quarter notes.
     pub bar_position_music: f64,
-    /// Cycle/loop start in quarter notes (optional).
+    /// Quarter notes.
     pub cycle_start_music: f64,
-    /// Cycle/loop end in quarter notes (optional).
+    /// Quarter notes.
     pub cycle_end_music: f64,
-    /// Tempo in BPM (optional).
+    /// BPM.
     pub tempo: f64,
-    /// Time signature numerator (optional).
     pub time_sig_numerator: i32,
-    /// Time signature denominator (optional).
     pub time_sig_denominator: i32,
-    /// Musical chord info (optional, simplified).
     pub chord: [u8; 12],
-    /// SMPTE frame offset (optional).
     pub smpte_offset_subframes: i32,
-    /// Video frame rate (optional).
     pub frame_rate: i32,
-    /// Samples to next MIDI clock (24 ppq).
+    /// 24 ppq.
     pub samples_to_next_clock: i32,
 }
 
@@ -178,7 +157,6 @@ impl Default for ProcessContext {
     }
 }
 
-/// View rectangle for plugin GUI dimensions.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct ViewRect {
@@ -198,7 +176,6 @@ impl ViewRect {
     }
 }
 
-/// Common header for all VST3 events.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct EventHeader {
@@ -209,7 +186,6 @@ pub struct EventHeader {
     pub event_type: u16,
 }
 
-/// Note on event data.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NoteOnEvent {
@@ -222,7 +198,6 @@ pub struct NoteOnEvent {
     pub note_id: i32,
 }
 
-/// Note off event data.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NoteOffEvent {
@@ -234,7 +209,6 @@ pub struct NoteOffEvent {
     pub tuning: f32,
 }
 
-/// Data event (for MIDI CC, pitch bend, etc.).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DataEvent {
@@ -244,7 +218,6 @@ pub struct DataEvent {
     pub bytes: [u8; 16],
 }
 
-/// Polyphonic pressure (aftertouch) event.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PolyPressureEvent {
@@ -255,20 +228,17 @@ pub struct PolyPressureEvent {
     pub note_id: i32,
 }
 
-/// Note expression value event (per-note modulation).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NoteExpressionValueEvent {
     pub header: EventHeader,
-    /// Note ID (unique identifier for the note).
     pub note_id: i32,
-    /// Expression type ID (0=volume, 1=pan, 2=tuning, 3=vibrato, 4=brightness).
+    /// 0=volume, 1=pan, 2=tuning, 3=vibrato, 4=brightness.
     pub type_id: u32,
-    /// Normalized value (0.0 to 1.0, meaning depends on type_id).
+    /// 0.0 to 1.0, meaning depends on type_id.
     pub value: f64,
 }
 
-/// Enum for all VST3 event types.
 #[derive(Clone, Copy)]
 pub enum Vst3Event {
     NoteOn(NoteOnEvent),
@@ -290,43 +260,29 @@ impl Vst3Event {
     }
 }
 
-/// VST3 parameter info flags.
 pub mod parameter_flags {
-    /// Parameter can be automated.
     pub const CAN_AUTOMATE: i32 = 1 << 0;
-    /// Parameter is read-only.
     pub const IS_READ_ONLY: i32 = 1 << 1;
-    /// Parameter wraps around.
     pub const IS_WRAP: i32 = 1 << 2;
-    /// Parameter is a list (discrete values).
+    /// Discrete values.
     pub const IS_LIST: i32 = 1 << 3;
-    /// Parameter is hidden.
     pub const IS_HIDDEN: i32 = 1 << 4;
-    /// This is a program change parameter.
     pub const IS_PROGRAM_CHANGE: i32 = 1 << 15;
-    /// Parameter is a bypass switch.
     pub const IS_BYPASS: i32 = 1 << 16;
 }
 
-/// Parameter information returned by IEditController::getParameterInfo.
 #[repr(C)]
 #[derive(Clone)]
 pub struct Vst3ParameterInfo {
-    /// Unique parameter ID.
     pub id: u32,
-    /// Parameter title (UTF-16, null-terminated).
     pub title: [u16; 128],
-    /// Parameter short title (UTF-16, null-terminated).
     pub short_title: [u16; 128],
-    /// Parameter unit (UTF-16, null-terminated).
     pub units: [u16; 128],
-    /// Number of discrete steps (0 = continuous).
+    /// 0 = continuous.
     pub step_count: i32,
-    /// Default normalized value (0.0-1.0).
+    /// 0.0-1.0.
     pub default_normalized_value: f64,
-    /// Unit ID for grouping.
     pub unit_id: i32,
-    /// Parameter flags (see parameter_flags module).
     pub flags: i32,
 }
 
