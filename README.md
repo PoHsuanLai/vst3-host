@@ -9,19 +9,19 @@ A pure-Rust library for hosting VST3 audio plugins. No C++ SDK required.
 
 ## Features
 
-- Load `.vst3` bundles on macOS, Linux, and Windows
-- Process audio in f32 or f64
-- MIDI input/output (Note On/Off, CC, Pitch Bend, Aftertouch, Program Change)
-- Note expression (Volume, Pan, Tuning, Vibrato, Brightness)
-- Sample-accurate parameter automation
-- Transport and tempo sync
-- Plugin state save/load
-- Plugin editor (GUI) embedding
-- Chainable configuration API
+- **Cross-platform** — macOS, Linux, Windows
+- **f32 and f64** audio processing
+- **MIDI** — Note On/Off, CC, Pitch Bend, Aftertouch, Program Change
+- **Note expression** — Volume, Pan, Tuning, Vibrato, Brightness
+- **Parameters** — enumerate, get/set, sample-accurate automation
+- **Transport** — tempo, time signature, play/record state, loop points, bar position
+- **State** — save/load plugin state
+- **GUI** — open/close plugin editor windows via `WindowHandle` + `EditorSize`
+- **Host events** — parameter edits, progress reports, unit/program changes via channels
 
 ### Host Interfaces
 
-The library implements these VST3 host interfaces, all discoverable by the plugin through `IComponentHandler::queryInterface`:
+All discoverable by the plugin through `IComponentHandler::queryInterface`:
 
 | Interface | Description |
 |-----------|-------------|
@@ -41,7 +41,6 @@ The library implements these VST3 host interfaces, all discoverable by the plugi
 use std::path::Path;
 use vst3_host::{Vst3Instance, AudioBuffer, MidiEvent, TransportState};
 
-// Load a plugin
 let mut plugin = Vst3Instance::load(
     Path::new("/Library/Audio/Plug-Ins/VST3/MyPlugin.vst3"),
     44100.0,  // sample rate
@@ -50,36 +49,62 @@ let mut plugin = Vst3Instance::load(
 
 println!("{} by {}", plugin.info().name, plugin.info().vendor);
 
-// Set up audio buffers
 let inputs: [&[f32]; 2] = [&[0.0; 512], &[0.0; 512]];
 let mut out_l = vec![0.0f32; 512];
 let mut out_r = vec![0.0f32; 512];
 let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
 let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
 
-// Process with MIDI
 let midi = [MidiEvent::note_on(0, 0, 60, 0.8)];
 let transport = TransportState::new().tempo(120.0).playing(true);
 let output = plugin.process(&mut buffer, &midi, None, &[], &transport);
-
-// output.midi_events  — MIDI events from the plugin
+// output.midi_events       — MIDI events from the plugin
 // output.parameter_changes — output parameter changes
 ```
 
-## Chainable Configuration
+## Usage
+
+### Parameters
 
 ```rust
+// Query
+let params = plugin.parameters();
+for p in &params {
+    println!("{}: {} [{}, {}]", p.id, p.name, p.min_value, p.max_value);
+}
+
+// Set (chainable)
+plugin
+    .set_parameter(0, 0.75)
+    .set_parameter(1, 0.5);
+```
+
+### Transport
+
+```rust
+let transport = TransportState::new()
+    .tempo(140.0)
+    .playing(true)
+    .time_signature(3, 4);
+```
+
+### State
+
+```rust
+// Save
+let state = plugin.state()?;
+
+// Load
+plugin.set_state(&state)?;
+
+// Chainable configuration
 plugin
     .set_sample_rate(48000.0)
     .set_block_size(256);
-
 plugin.set_use_f64(true)?;
-plugin.set_state(&saved_state)?;
 ```
 
-## Host Events
-
-Poll for events the plugin sends to the host:
+### Host Events
 
 ```rust
 use vst3_host::{ParameterEditEvent, ProgressEvent, UnitEvent};
@@ -111,13 +136,12 @@ for event in plugin.poll_unit_events() {
 
 For async integration, use `param_event_receiver()`, `progress_event_receiver()`, or `unit_event_receiver()` to get a `crossbeam_channel::Receiver` directly.
 
-## Plugin Editor (GUI)
+## Plugin Editor
 
 ```rust
 use vst3_host::WindowHandle;
 
 if plugin.has_editor() {
-    // Construct a WindowHandle from your platform's native view pointer.
     // This is the only unsafe boundary in the public API.
     let handle = unsafe { WindowHandle::from_raw(native_view_ptr) };
     let size = plugin.open_editor(handle)?;
