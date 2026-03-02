@@ -1,6 +1,5 @@
 //! Host-side VST3 plugin management.
 
-mod bundle;
 mod instance;
 mod library;
 

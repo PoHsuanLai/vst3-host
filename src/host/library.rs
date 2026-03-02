@@ -12,8 +12,6 @@ use crate::ffi::{
     K_RESULT_OK,
 };
 
-use super::bundle::find_library_path;
-
 pub struct Vst3Library {
     _library: Library,
     factory: *mut c_void,
@@ -27,12 +25,14 @@ unsafe impl Send for Vst3Library {}
 unsafe impl Sync for Vst3Library {}
 
 impl Vst3Library {
-    pub fn load(bundle_path: &Path) -> Result<Arc<Self>> {
-        let lib_path = find_library_path(bundle_path)?;
-
+    /// Load a VST3 library from a pre-resolved path to the actual binary.
+    ///
+    /// Bundle resolution (finding the binary inside a `.vst3` bundle) should
+    /// be done by the caller before invoking this method.
+    pub fn load(lib_path: &Path) -> Result<Arc<Self>> {
         let library = unsafe {
-            Library::new(&lib_path).map_err(|e| Vst3Error::LoadFailed {
-                path: lib_path.clone(),
+            Library::new(lib_path).map_err(|e| Vst3Error::LoadFailed {
+                path: lib_path.to_path_buf(),
                 stage: LoadStage::Opening,
                 reason: e.to_string(),
             })?
@@ -42,7 +42,7 @@ impl Vst3Library {
             library
                 .get(b"GetPluginFactory\0")
                 .map_err(|e| Vst3Error::LoadFailed {
-                    path: lib_path.clone(),
+                    path: lib_path.to_path_buf(),
                     stage: LoadStage::Factory,
                     reason: format!("Missing GetPluginFactory symbol: {}", e),
                 })?
@@ -51,7 +51,7 @@ impl Vst3Library {
         let factory = unsafe { get_factory() };
         if factory.is_null() {
             return Err(Vst3Error::LoadFailed {
-                path: lib_path,
+                path: lib_path.to_path_buf(),
                 stage: LoadStage::Factory,
                 reason: "GetPluginFactory returned null".to_string(),
             });

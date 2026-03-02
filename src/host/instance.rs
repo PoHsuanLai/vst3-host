@@ -728,6 +728,19 @@ impl Vst3Instance {
         }
     }
 
+    /// Stop audio processing without deactivating.
+    /// Safe to call multiple times. Drop handles full deactivation.
+    pub fn stop_processing(&mut self) {
+        if self.is_active {
+            unsafe {
+                ((*self.interfaces.processor_vtable).set_processing)(
+                    self.interfaces.processor,
+                    0,
+                );
+            }
+        }
+    }
+
     pub fn close_editor(&mut self) -> &mut Self {
         if let (Some(view), Some(vtable)) = (self.editor.view, self.editor.view_vtable) {
             unsafe {
