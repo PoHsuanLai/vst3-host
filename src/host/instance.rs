@@ -28,8 +28,8 @@ use super::library::Vst3Library;
 pub(crate) struct PluginInterfaces {
     pub component: *mut c_void,
     pub component_vtable: *const IComponentVtable,
-    pub processor: *mut c_void,
-    pub processor_vtable: *const IAudioProcessorVtable,
+    pub processor: Option<*mut c_void>,
+    pub processor_vtable: Option<*const IAudioProcessorVtable>,
     pub controller: Option<*mut c_void>,
     pub controller_vtable: Option<*const IEditControllerVtable>,
     pub separate_controller: bool,
@@ -39,6 +39,18 @@ unsafe impl Send for PluginInterfaces {}
 unsafe impl Sync for PluginInterfaces {}
 
 impl PluginInterfaces {
+    /// Call `f` with the processor pointer and vtable if both are present.
+    fn with_processor<R>(
+        &self,
+        default: R,
+        f: impl FnOnce(*mut c_void, *const IAudioProcessorVtable) -> R,
+    ) -> R {
+        match (self.processor, self.processor_vtable) {
+            (Some(proc), Some(vtable)) => f(proc, vtable),
+            _ => default,
+        }
+    }
+
     /// Call `f` with the controller pointer and vtable if both are present.
     fn with_controller<R>(
         &self,
@@ -276,8 +288,8 @@ impl Vst3Instance {
             interfaces: PluginInterfaces {
                 component,
                 component_vtable,
-                processor,
-                processor_vtable,
+                processor: Some(processor),
+                processor_vtable: Some(processor_vtable),
                 controller,
                 controller_vtable,
                 separate_controller,
@@ -312,6 +324,18 @@ impl Vst3Instance {
         instance.initialize()?;
 
         Ok(instance)
+    }
+
+    /// Load a VST3 plugin for GUI/editor use only (no audio processing).
+    ///
+    /// Performs full initialization (including IAudioProcessor setup, bus
+    /// activation, and setActive) but skips setProcessing. Many plugins
+    /// require the component to be active before their editor works.
+    pub fn load_gui_only(path: &Path) -> Result<Self> {
+        // Keep full initialization including setProcessing(true) — some plugins
+        // (e.g. TAL-NoiseMaker) require the audio processor to be active for
+        // their editor to work. We never actually process audio on this instance.
+        Self::load(path, 44100.0, 512)
     }
 
     pub fn info(&self) -> &PluginInfo {
@@ -373,12 +397,9 @@ impl Vst3Instance {
             sample_rate: self.audio.sample_rate,
         };
 
-        unsafe {
-            ((*self.interfaces.processor_vtable).setup_processing)(
-                self.interfaces.processor,
-                &setup,
-            );
-        }
+        self.interfaces.with_processor((), |proc, vt| unsafe {
+            ((*vt).setup_processing)(proc, &setup);
+        });
     }
 
     pub fn process<T: Sample, E: Vst3MidiEvent>(
@@ -477,12 +498,9 @@ impl Vst3Instance {
             context: &mut process_context,
         };
 
-        let result = unsafe {
-            ((*self.interfaces.processor_vtable).process)(
-                self.interfaces.processor,
-                &mut process_data,
-            )
-        };
+        let result = self.interfaces.with_processor(K_RESULT_OK, |proc, vt| unsafe {
+            ((*vt).process)(proc, &mut process_data)
+        });
 
         if result != K_RESULT_OK {
             buffer.clear_outputs();
@@ -732,12 +750,9 @@ impl Vst3Instance {
     /// Safe to call multiple times. Drop handles full deactivation.
     pub fn stop_processing(&mut self) {
         if self.is_active {
-            unsafe {
-                ((*self.interfaces.processor_vtable).set_processing)(
-                    self.interfaces.processor,
-                    0,
-                );
-            }
+            self.interfaces.with_processor((), |proc, vt| unsafe {
+                ((*vt).set_processing)(proc, 0);
+            });
         }
     }
 
@@ -868,12 +883,9 @@ impl Vst3Instance {
             sample_rate: self.audio.sample_rate,
         };
 
-        let result = unsafe {
-            ((*self.interfaces.processor_vtable).setup_processing)(
-                self.interfaces.processor,
-                &setup,
-            )
-        };
+        let result = self.interfaces.with_processor(K_RESULT_OK, |proc, vt| unsafe {
+            ((*vt).setup_processing)(proc, &setup)
+        });
 
         if result != K_RESULT_OK && result != K_RESULT_TRUE {
             return Err(Vst3Error::PluginError {
@@ -895,9 +907,9 @@ impl Vst3Instance {
             });
         }
 
-        let result = unsafe {
-            ((*self.interfaces.processor_vtable).set_processing)(self.interfaces.processor, 1)
-        };
+        let result = self.interfaces.with_processor(K_RESULT_OK, |proc, vt| unsafe {
+            ((*vt).set_processing)(proc, 1)
+        });
         if result != K_RESULT_OK && result != K_RESULT_TRUE {
             return Err(Vst3Error::PluginError {
                 stage: LoadStage::Activation,
@@ -959,8 +971,10 @@ impl Drop for Vst3Instance {
         self.close_editor();
 
         if self.is_active {
+            self.interfaces.with_processor((), |proc, vt| unsafe {
+                ((*vt).set_processing)(proc, 0);
+            });
             unsafe {
-                ((*self.interfaces.processor_vtable).set_processing)(self.interfaces.processor, 0);
                 ((*self.interfaces.component_vtable).set_active)(self.interfaces.component, 0);
             }
         }
@@ -975,8 +989,10 @@ impl Drop for Vst3Instance {
 
         unsafe {
             release_com(self.interfaces.component);
-            release_com(self.interfaces.processor);
 
+            if let Some(proc) = self.interfaces.processor {
+                release_com(proc);
+            }
             if let Some(ctrl) = self.interfaces.controller {
                 release_com(ctrl);
             }
