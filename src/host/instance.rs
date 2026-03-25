@@ -498,9 +498,11 @@ impl Vst3Instance {
             context: &mut process_context,
         };
 
-        let result = self.interfaces.with_processor(K_RESULT_OK, |proc, vt| unsafe {
-            ((*vt).process)(proc, &mut process_data)
-        });
+        let result = self
+            .interfaces
+            .with_processor(K_RESULT_OK, |proc, vt| unsafe {
+                ((*vt).process)(proc, &mut process_data)
+            });
 
         if result != K_RESULT_OK {
             buffer.clear_outputs();
@@ -883,9 +885,11 @@ impl Vst3Instance {
             sample_rate: self.audio.sample_rate,
         };
 
-        let result = self.interfaces.with_processor(K_RESULT_OK, |proc, vt| unsafe {
-            ((*vt).setup_processing)(proc, &setup)
-        });
+        let result = self
+            .interfaces
+            .with_processor(K_RESULT_OK, |proc, vt| unsafe {
+                ((*vt).setup_processing)(proc, &setup)
+            });
 
         if result != K_RESULT_OK && result != K_RESULT_TRUE {
             return Err(Vst3Error::PluginError {
@@ -907,9 +911,11 @@ impl Vst3Instance {
             });
         }
 
-        let result = self.interfaces.with_processor(K_RESULT_OK, |proc, vt| unsafe {
-            ((*vt).set_processing)(proc, 1)
-        });
+        let result = self
+            .interfaces
+            .with_processor(K_RESULT_OK, |proc, vt| unsafe {
+                ((*vt).set_processing)(proc, 1)
+            });
         if result != K_RESULT_OK && result != K_RESULT_TRUE {
             return Err(Vst3Error::PluginError {
                 stage: LoadStage::Activation,

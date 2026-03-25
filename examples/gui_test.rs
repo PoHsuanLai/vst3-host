@@ -18,7 +18,8 @@ use winit::window::{Window, WindowId};
 
 use vst3_host::{Vst3Instance, WindowHandle};
 
-const PLUGIN_PATH: &str = "/Library/Audio/Plug-Ins/VST3/TAL-NoiseMaker.vst3/Contents/MacOS/TAL-NoiseMaker";
+const PLUGIN_PATH: &str =
+    "/Library/Audio/Plug-Ins/VST3/TAL-NoiseMaker.vst3/Contents/MacOS/TAL-NoiseMaker";
 
 struct App {
     window: Option<Window>,
