@@ -416,6 +416,22 @@ impl Vst3Instance {
         &self.info
     }
 
+    /// Returns the plugin's reported processing latency in samples.
+    /// Returns 0 if the processor interface is unavailable.
+    ///
+    /// TODO(plugin-latency-runtime): VST3 plugins signal latency changes via
+    /// `IComponentHandler::restartComponent(kLatencyChanged)`. We don't
+    /// implement `IHostApplication::restartComponent` yet, so runtime latency
+    /// updates are invisible — only the initial value queried here is seen.
+    /// To support runtime updates: implement a restart handler on the host
+    /// context that flips an atomic flag, poll it in the plugin-server loop
+    /// (next to `poll_latency_changes`), and send `BridgeMessage::LatencyChanged`.
+    pub fn get_latency_samples(&self) -> u32 {
+        self.interfaces.with_processor(0, |proc, vt| unsafe {
+            ((*vt).get_latency_samples)(proc)
+        })
+    }
+
     pub fn supports_f64(&self) -> bool {
         self.info.supports_f64
     }
