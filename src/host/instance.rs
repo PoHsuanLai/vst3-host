@@ -16,7 +16,7 @@ use crate::ffi::{
     AudioBusBuffers, BusInfo, IAudioProcessorVtable, IComponentVtable, IConnectionPointVtable,
     IEditControllerVtable, IPlugViewVtable, IUnknownVtable, ProcessData, ProcessSetup, ViewRect,
     IID_IAUDIO_PROCESSOR, IID_ICOMPONENT, IID_ICONNECTION_POINT, IID_IEDIT_CONTROLLER, K_AUDIO,
-    K_INPUT, K_OUTPUT, K_REALTIME, K_RESULT_OK, K_RESULT_TRUE, K_SAMPLE_32, K_SAMPLE_64,
+    K_EVENT, K_INPUT, K_OUTPUT, K_REALTIME, K_RESULT_OK, K_RESULT_TRUE, K_SAMPLE_32, K_SAMPLE_64,
 };
 use crate::types::{
     AudioBuffer, BufferPtrs, EditorSize, NoteExpressionValue, ParameterChanges, PluginInfo,
@@ -177,6 +177,80 @@ pub struct Vst3Instance {
 }
 
 impl Vst3Instance {
+    /// Lightweight probe: load library, read factory and bus metadata, return
+    /// without calling init() or setActive(). Safe for plugins with license dialogs.
+    pub fn probe(path: &Path) -> Result<PluginInfo> {
+        if !path.exists() {
+            return Err(Vst3Error::LoadFailed {
+                path: path.to_path_buf(),
+                stage: LoadStage::Scanning,
+                reason: "Plugin file not found".to_string(),
+            });
+        }
+
+        let library = Vst3Library::load(path)?;
+        let count = library.count_classes();
+        if count == 0 {
+            return Err(Vst3Error::LoadFailed {
+                path: path.to_path_buf(),
+                stage: LoadStage::Factory,
+                reason: "VST3 factory contains no classes".to_string(),
+            });
+        }
+
+        let factory_info = library.get_factory_info();
+        let vendor = factory_info.map(|info| info.vendor).unwrap_or_default();
+
+        let (class_cid, name) = (0..count)
+            .find_map(|i| {
+                let info = library.get_class_info(i).ok()?;
+                if info.category.contains("Audio") {
+                    Some((info.cid, info.name))
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Vst3Error::LoadFailed {
+                path: path.to_path_buf(),
+                stage: LoadStage::Factory,
+                reason: "No audio processor classes found in VST3".to_string(),
+            })?;
+
+        let component = library.create_instance(&class_cid, &IID_ICOMPONENT)?;
+        let component_vtable = unsafe { *(component as *const *const IComponentVtable) };
+
+        // Query bus info (available before init on most plugins)
+        let (num_inputs, num_outputs) = unsafe {
+            let inputs = get_bus_channel_count(component, component_vtable, K_INPUT, 0).unwrap_or(0);
+            let outputs = get_bus_channel_count(component, component_vtable, K_OUTPUT, 1).unwrap_or(2);
+            (inputs, outputs)
+        };
+
+        // Check for audio processor and f64 support
+        let supports_f64 = unsafe {
+            if let Some(processor) = query_interface(component, &IID_IAUDIO_PROCESSOR) {
+                let vtable = *(processor as *const *const IAudioProcessorVtable);
+                ((*vtable).can_process_sample_size)(processor, K_SAMPLE_64) == K_RESULT_OK
+            } else {
+                false
+            }
+        };
+
+        let unique_id = cid_to_string(&class_cid);
+        // VST3 MIDI: check if there are event input buses
+        let receives_midi = unsafe {
+            let event_bus_count = ((*component_vtable).get_bus_count)(component, K_EVENT, K_INPUT);
+            event_bus_count > 0
+        };
+
+        Ok(PluginInfo::new(format!("vst3.{}", unique_id), name)
+            .vendor(vendor)
+            .version("1.0.0".to_string())
+            .audio_io(num_inputs, num_outputs)
+            .midi(receives_midi)
+            .f64_support(supports_f64))
+    }
+
     pub fn load(path: &Path, sample_rate: f64, block_size: usize) -> Result<Self> {
         if !path.exists() {
             return Err(Vst3Error::LoadFailed {
