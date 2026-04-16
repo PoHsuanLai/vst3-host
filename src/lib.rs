@@ -12,7 +12,7 @@ pub use error::{LoadStage, Result, Vst3Error};
 pub use ffi::{parameter_flags, BusInfo, Vst3ParameterInfo};
 pub use host::{Vst3Instance, Vst3Library};
 pub use types::{
-    AudioBuffer, EditorSize, MidiData, MidiEvent, NoteExpressionType, NoteExpressionValue,
+    AudioBuffer, EditorSize, MidiData, Midi1Event, NoteExpressionType, NoteExpressionValue,
     ParameterChanges, ParameterPoint, ParameterQueue, PluginInfo, ProcessOutput, Sample,
     TransportState, Vst3MidiEvent, WindowHandle,
 };

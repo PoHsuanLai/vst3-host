@@ -12,7 +12,7 @@ use crate::ffi::{
     DataExchangeBlock, IBStreamVtable, IComponentHandlerVtable, IDataExchangeHandlerVtable,
     IEventListVtable, IParameterChangesVtable, IProgressVtable, IUnitHandlerVtable, K_RESULT_OK,
 };
-use crate::types::{MidiEvent, ParameterChanges, ParameterQueue};
+use crate::types::{Midi1Event, ParameterChanges, ParameterQueue};
 
 #[test]
 fn test_bstream_new() {
@@ -295,7 +295,7 @@ fn test_event_list_new() {
 #[test]
 fn test_event_list_update_from_midi() {
     let mut event_list = EventList::new();
-    let midi_events = [MidiEvent::note_on(0, 0, 60, 0.8)];
+    let midi_events = [Midi1Event::note_on(0, 0, 60, 0.8)];
     event_list.update_from_midi(&midi_events);
 
     unsafe {
@@ -312,8 +312,8 @@ fn test_event_list_update_from_midi() {
 fn test_event_list_clear() {
     let mut event_list = EventList::new();
     let midi_events = [
-        MidiEvent::note_on(0, 0, 60, 0.8),
-        MidiEvent::note_off(10, 0, 60, 0.0),
+        Midi1Event::note_on(0, 0, 60, 0.8),
+        Midi1Event::note_off(10, 0, 60, 0.0),
     ];
     event_list.update_from_midi(&midi_events);
     event_list.clear();

@@ -12,14 +12,14 @@ pub trait Vst3MidiEvent {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MidiEvent {
+pub struct Midi1Event {
     pub sample_offset: i32,
     /// 0-15
     pub channel: u8,
     pub data: MidiData,
 }
 
-impl MidiEvent {
+impl Midi1Event {
     pub fn note_on(sample_offset: i32, channel: u8, note: u8, velocity: f32) -> Self {
         Self {
             sample_offset,
@@ -61,7 +61,7 @@ impl MidiEvent {
     }
 }
 
-impl Vst3MidiEvent for MidiEvent {
+impl Vst3MidiEvent for Midi1Event {
     fn sample_offset(&self) -> i32 {
         self.sample_offset
     }
@@ -276,9 +276,9 @@ impl NoteExpressionValue {
     }
 }
 
-pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
+pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<Midi1Event> {
     match event {
-        Vst3Event::NoteOn(e) => Some(MidiEvent {
+        Vst3Event::NoteOn(e) => Some(Midi1Event {
             sample_offset: e.header.sample_offset,
             channel: e.channel as u8,
             data: MidiData::NoteOn {
@@ -286,7 +286,7 @@ pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
                 velocity: e.velocity,
             },
         }),
-        Vst3Event::NoteOff(e) => Some(MidiEvent {
+        Vst3Event::NoteOff(e) => Some(Midi1Event {
             sample_offset: e.header.sample_offset,
             channel: e.channel as u8,
             data: MidiData::NoteOff {
@@ -294,7 +294,7 @@ pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
                 velocity: e.velocity,
             },
         }),
-        Vst3Event::PolyPressure(e) => Some(MidiEvent {
+        Vst3Event::PolyPressure(e) => Some(Midi1Event {
             sample_offset: e.header.sample_offset,
             channel: e.channel as u8,
             data: MidiData::PolyPressure {
@@ -311,7 +311,7 @@ pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
             let msg_type = status & 0xF0;
 
             match msg_type {
-                0xB0 if e.size >= 3 => Some(MidiEvent {
+                0xB0 if e.size >= 3 => Some(Midi1Event {
                     sample_offset: e.header.sample_offset,
                     channel,
                     data: MidiData::ControlChange {
@@ -319,14 +319,14 @@ pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
                         value: e.bytes[2],
                     },
                 }),
-                0xC0 => Some(MidiEvent {
+                0xC0 => Some(Midi1Event {
                     sample_offset: e.header.sample_offset,
                     channel,
                     data: MidiData::ProgramChange {
                         program: e.bytes[1],
                     },
                 }),
-                0xD0 => Some(MidiEvent {
+                0xD0 => Some(Midi1Event {
                     sample_offset: e.header.sample_offset,
                     channel,
                     data: MidiData::ChannelPressure {
@@ -335,7 +335,7 @@ pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
                 }),
                 0xE0 if e.size >= 3 => {
                     let value = ((e.bytes[2] as u16) << 7) | (e.bytes[1] as u16);
-                    Some(MidiEvent {
+                    Some(Midi1Event {
                         sample_offset: e.header.sample_offset,
                         channel,
                         data: MidiData::PitchBend { value },

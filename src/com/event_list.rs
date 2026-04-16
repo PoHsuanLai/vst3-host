@@ -9,7 +9,7 @@ use crate::ffi::{
     PolyPressureEvent, Vst3Event, IID_IEVENT_LIST, K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 use crate::types::{
-    vst3_to_midi_event, vst3_to_note_expression, MidiEvent, NoteExpressionValue, Vst3MidiEvent,
+    vst3_to_midi_event, vst3_to_note_expression, Midi1Event, NoteExpressionValue, Vst3MidiEvent,
 };
 
 use smallvec::SmallVec;
@@ -73,7 +73,7 @@ impl EventList {
         self.events.is_empty()
     }
 
-    pub fn to_midi_events(&self) -> SmallVec<[MidiEvent; 64]> {
+    pub fn to_midi_events(&self) -> SmallVec<[Midi1Event; 64]> {
         self.events.iter().filter_map(vst3_to_midi_event).collect()
     }
 

@@ -11,14 +11,14 @@ mod transport;
 
 pub use audio::{AudioBuffer, BufferPtrs, Sample};
 pub use events::{
-    vst3_to_midi_event, vst3_to_note_expression, MidiData, MidiEvent, NoteExpressionType,
+    vst3_to_midi_event, vst3_to_note_expression, MidiData, Midi1Event, NoteExpressionType,
     NoteExpressionValue, Vst3MidiEvent,
 };
 pub use params::{ParameterChanges, ParameterPoint, ParameterQueue};
 pub use transport::TransportState;
 
 pub struct ProcessOutput {
-    pub midi_events: SmallVec<[MidiEvent; 64]>,
+    pub midi_events: SmallVec<[Midi1Event; 64]>,
     pub parameter_changes: ParameterChanges,
 }
 
