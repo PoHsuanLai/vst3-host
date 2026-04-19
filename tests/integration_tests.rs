@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use vst3_host::{AudioBuffer, Midi1Event, TransportState, Vst3Instance};
+use vst3_host::{AudioBuffer, MidiEvent, TransportState, Vst3Instance};
 
 // Common VST3 plugin paths on macOS
 const TAL_NOISEMAKER: &str = "/Library/Audio/Plug-Ins/VST3/TAL-NoiseMaker.vst3";
@@ -93,7 +93,7 @@ fn test_process_silence() {
 
     let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
     let transport = TransportState::new().tempo(120.0).playing(true);
-    let midi: [Midi1Event; 0] = [];
+    let midi: [MidiEvent; 0] = [];
 
     let _output_events = plugin.process(&mut buffer, &midi, None, &[], &transport);
     println!("Processing completed successfully");
@@ -127,7 +127,7 @@ fn test_process_with_midi() {
     let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
     let transport = TransportState::new().tempo(120.0).playing(true);
 
-    let midi = [Midi1Event::note_on(0, 0, 60, 0.8)];
+    let midi = [MidiEvent::note_on(0, 0, 60, 0x9999)];
 
     let _output_events = plugin.process(&mut buffer, &midi, None, &[], &transport);
 
@@ -164,10 +164,10 @@ fn test_process_multiple_buffers() {
         let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 44100.0);
         let transport = TransportState::new().tempo(120.0).playing(true);
 
-        let midi: Vec<Midi1Event> = if i == 0 {
-            vec![Midi1Event::note_on(0, 0, 60, 0.8)]
+        let midi: Vec<MidiEvent> = if i == 0 {
+            vec![MidiEvent::note_on(0, 0, 60, 0x9999)]
         } else if i == 9 {
-            vec![Midi1Event::note_off(0, 0, 60, 0.0)]
+            vec![MidiEvent::note_off(0, 0, 60, 0)]
         } else {
             vec![]
         };
@@ -265,7 +265,7 @@ fn test_rapid_process_calls() {
         Vst3Instance::load(Path::new(path), 44100.0, 512).expect("Failed to load plugin");
 
     let transport = TransportState::new().tempo(120.0).playing(true);
-    let midi: [Midi1Event; 0] = [];
+    let midi: [MidiEvent; 0] = [];
 
     let start = std::time::Instant::now();
     for _ in 0..689 {

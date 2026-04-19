@@ -12,14 +12,14 @@ pub use error::{LoadStage, Result, Vst3Error};
 pub use ffi::{parameter_flags, BusInfo, Vst3ParameterInfo};
 pub use host::{Vst3Instance, Vst3Library};
 pub use types::{
-    AudioBuffer, EditorSize, MidiData, Midi1Event, NoteExpressionType, NoteExpressionValue,
-    ParameterChanges, ParameterPoint, ParameterQueue, PluginInfo, ProcessOutput, Sample,
-    TransportState, Vst3MidiEvent, WindowHandle,
+    vst3_event_from_midi, vst3_to_midi_event, AudioBuffer, EditorSize, MidiEvent,
+    NoteExpressionType, NoteExpressionValue, ParameterChanges, ParameterPoint, ParameterQueue,
+    PluginInfo, ProcessOutput, Sample, TransportState, WindowHandle,
 };
 
 pub use com::{ParameterEditEvent, ProgressEvent, UnitEvent};
 
-/// FFI event types for custom [`Vst3MidiEvent`] implementations.
+/// FFI event types reachable through [`vst3_to_midi_event`] / [`vst3_event_from_midi`].
 pub mod events {
     pub use crate::ffi::{
         DataEvent, EventHeader, NoteExpressionValueEvent, NoteOffEvent, NoteOnEvent,

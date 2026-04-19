@@ -19,8 +19,8 @@ use crate::ffi::{
     K_EVENT, K_INPUT, K_OUTPUT, K_REALTIME, K_RESULT_OK, K_RESULT_TRUE, K_SAMPLE_32, K_SAMPLE_64,
 };
 use crate::types::{
-    AudioBuffer, BufferPtrs, EditorSize, NoteExpressionValue, ParameterChanges, PluginInfo,
-    ProcessOutput, Sample, TransportState, Vst3MidiEvent, WindowHandle,
+    AudioBuffer, BufferPtrs, EditorSize, MidiEvent, NoteExpressionValue, ParameterChanges,
+    PluginInfo, ProcessOutput, Sample, TransportState, WindowHandle,
 };
 
 use super::library::Vst3Library;
@@ -492,10 +492,10 @@ impl Vst3Instance {
         });
     }
 
-    pub fn process<T: Sample, E: Vst3MidiEvent>(
+    pub fn process<T: Sample>(
         &mut self,
         buffer: &mut AudioBuffer<T>,
-        midi_events: &[E],
+        midi_events: &[MidiEvent],
         param_changes: Option<&ParameterChanges>,
         note_expressions: &[NoteExpressionValue],
         transport: &TransportState,

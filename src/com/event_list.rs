@@ -9,7 +9,8 @@ use crate::ffi::{
     PolyPressureEvent, Vst3Event, IID_IEVENT_LIST, K_NOT_IMPLEMENTED, K_RESULT_OK,
 };
 use crate::types::{
-    vst3_to_midi_event, vst3_to_note_expression, Midi1Event, NoteExpressionValue, Vst3MidiEvent,
+    vst3_event_from_midi, vst3_to_midi_event, vst3_to_note_expression, MidiEvent,
+    NoteExpressionValue,
 };
 
 use smallvec::SmallVec;
@@ -41,20 +42,20 @@ impl EventList {
         })
     }
 
-    pub fn update_from_midi<E: Vst3MidiEvent>(&mut self, midi_events: &[E]) {
+    pub fn update_from_midi(&mut self, midi_events: &[MidiEvent]) {
         self.events.clear();
         self.events
-            .extend(midi_events.iter().filter_map(|e| e.to_vst3_event()));
+            .extend(midi_events.iter().filter_map(vst3_event_from_midi));
     }
 
-    pub fn update_from_midi_and_expression<E: Vst3MidiEvent>(
+    pub fn update_from_midi_and_expression(
         &mut self,
-        midi_events: &[E],
+        midi_events: &[MidiEvent],
         note_expressions: &[NoteExpressionValue],
     ) {
         self.events.clear();
         self.events
-            .extend(midi_events.iter().filter_map(|e| e.to_vst3_event()));
+            .extend(midi_events.iter().filter_map(vst3_event_from_midi));
         for expr in note_expressions {
             self.events.push(expr.to_vst3_event());
         }
@@ -73,7 +74,7 @@ impl EventList {
         self.events.is_empty()
     }
 
-    pub fn to_midi_events(&self) -> SmallVec<[Midi1Event; 64]> {
+    pub fn to_midi_events(&self) -> SmallVec<[MidiEvent; 64]> {
         self.events.iter().filter_map(vst3_to_midi_event).collect()
     }
 
