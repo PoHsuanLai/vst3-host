@@ -122,17 +122,9 @@ impl Vst3Loaded {
     /// Lightweight probe: load library, read factory and bus metadata, return
     /// without calling init() or setActive(). Safe for plugins with license dialogs.
     pub fn probe(path: &Path) -> Result<PluginInfo> {
-        if !path.exists() {
-            return Err(Vst3Error::LoadFailed {
-                path: path.to_path_buf(),
-                stage: LoadStage::Scanning,
-                reason: "Plugin file not found".to_string(),
-            });
-        }
-
+        check_exists(path)?;
         let library = Vst3Library::load(path)?;
-        let count = library.count_classes();
-        if count == 0 {
+        if library.count_classes() == 0 {
             return Err(Vst3Error::LoadFailed {
                 path: path.to_path_buf(),
                 stage: LoadStage::Factory,
@@ -140,34 +132,16 @@ impl Vst3Loaded {
             });
         }
 
-        let factory_info = library.get_factory_info();
-        let vendor = factory_info.map(|info| info.vendor).unwrap_or_default();
-
         let (class_cid, class_cid_bytes, name) = find_audio_class(&library, path)?;
-
         let component: ComPtr<IComponent> = library.create_instance(&class_cid)?;
-
-        let (num_inputs, num_outputs) = (
-            get_bus_channel_count(&component, K_INPUT, 0).unwrap_or(0),
-            get_bus_channel_count(&component, K_OUTPUT, 1).unwrap_or(2),
-        );
-
-        let supports_f64 = component
-            .cast::<IAudioProcessor>()
-            .map(|proc| unsafe {
-                proc.canProcessSampleSize(crate::types::K_SAMPLE_64_INT) == kResultOk
-            })
-            .unwrap_or(false);
-
-        let unique_id = cid_to_string(&class_cid_bytes);
-        let receives_midi = unsafe { component.getBusCount(crate::host::instance::K_EVENT, K_INPUT) > 0 };
-
-        Ok(PluginInfo::new(format!("vst3.{}", unique_id), name)
-            .vendor(vendor)
-            .version("1.0.0".to_string())
-            .audio_io(num_inputs, num_outputs)
-            .midi(receives_midi)
-            .f64_support(supports_f64))
+        let processor = component.cast::<IAudioProcessor>();
+        Ok(build_plugin_info_raw(
+            &library,
+            &component,
+            processor.as_ref(),
+            &name,
+            &class_cid_bytes,
+        ))
     }
 
     /// Load a VST3 plugin for GUI/editor use only — no audio processing will
@@ -181,17 +155,9 @@ impl Vst3Loaded {
     /// [`Vst3Instance::load`]. Returns `Loaded` state; the caller decides
     /// whether to [`activate`](Vst3Loaded::activate) it.
     pub(super) fn load_with_info(path: &Path) -> Result<Self> {
-        if !path.exists() {
-            return Err(Vst3Error::LoadFailed {
-                path: path.to_path_buf(),
-                stage: LoadStage::Scanning,
-                reason: "Plugin file not found".to_string(),
-            });
-        }
-
+        check_exists(path)?;
         let library = Vst3Library::load(path)?;
-        let count = library.count_classes();
-        if count == 0 {
+        if library.count_classes() == 0 {
             return Err(Vst3Error::LoadFailed {
                 path: path.to_path_buf(),
                 stage: LoadStage::Factory,
@@ -199,43 +165,38 @@ impl Vst3Loaded {
             });
         }
 
-        let factory_info = library.get_factory_info();
-        let vendor = factory_info.map(|info| info.vendor).unwrap_or_default();
-
         let (class_cid, class_cid_bytes, name) = find_audio_class(&library, path)?;
-
         let component: ComPtr<IComponent> = library.create_instance(&class_cid)?;
-
-        let processor = component
-            .cast::<IAudioProcessor>()
-            .ok_or_else(|| Vst3Error::LoadFailed {
+        let processor = component.cast::<IAudioProcessor>().ok_or_else(|| {
+            Vst3Error::LoadFailed {
                 path: path.to_path_buf(),
                 stage: LoadStage::Instantiation,
                 reason: "VST3 plugin does not support IAudioProcessor".to_string(),
-            })?;
-
+            }
+        })?;
         let (controller, separate_controller) = query_controller(&component, &library);
 
-        let supports_f64 = unsafe {
-            processor.canProcessSampleSize(crate::types::K_SAMPLE_64_INT) == kResultOk
-        };
+        let info = build_plugin_info(&library, &component, &processor, &name, &class_cid_bytes);
+        let mut loaded = Self::assemble(library, component, processor, controller, separate_controller, info);
+        loaded.initialize()?;
+        Ok(loaded)
+    }
 
-        let num_input_channels = get_bus_channel_count(&component, K_INPUT, 0).unwrap_or(0);
-        let num_output_channels = get_bus_channel_count(&component, K_OUTPUT, 1).unwrap_or(2);
-
-        let unique_id = cid_to_string(&class_cid_bytes);
-        let info = PluginInfo::new(format!("vst3.{}", unique_id), name.clone())
-            .vendor(vendor)
-            .version("1.0.0".to_string())
-            .audio_io(num_input_channels, num_output_channels)
-            .midi(true)
-            .f64_support(supports_f64);
-
+    /// Build `Self` from already-queried interfaces. No side effects — the
+    /// caller runs [`initialize`](Self::initialize).
+    fn assemble(
+        library: Arc<Vst3Library>,
+        component: ComPtr<IComponent>,
+        processor: ComPtr<IAudioProcessor>,
+        controller: Option<ComPtr<IEditController>>,
+        separate_controller: bool,
+        info: PluginInfo,
+    ) -> Self {
         let host_application = HostApplication::new("vst3-host");
         let (component_handler, param_event_rx, progress_event_rx, unit_event_rx) =
             ComponentHandler::new();
 
-        let mut loaded = Self {
+        Self {
             _library: library,
             interfaces: PluginInterfaces {
                 component,
@@ -255,10 +216,7 @@ impl Vst3Loaded {
                 size: DEFAULT_EDITOR_SIZE,
             },
             info,
-        };
-
-        loaded.initialize()?;
-        Ok(loaded)
+        }
     }
 
     /// Transition to the processing state. Runs `setupProcessing`, activates
@@ -529,7 +487,34 @@ impl Vst3Loaded {
     }
 
     fn initialize(&mut self) -> Result<()> {
-        let host_ptr: *mut FUnknown = self
+        let host_ptr = self.host_context_ptr()?;
+
+        let result = unsafe { self.interfaces.component.initialize(host_ptr) };
+        if result != kResultOk && result != kResultFalse {
+            unsafe { FUnknown::release(host_ptr) };
+            return Err(Vst3Error::PluginError {
+                stage: LoadStage::Initialization,
+                code: result,
+            });
+        }
+
+        self.reconcile_bus_counts();
+
+        if self.interfaces.separate_controller {
+            if let Some(ctrl) = &self.interfaces.controller {
+                unsafe { let _ = ctrl.initialize(host_ptr); }
+            }
+            self.connect_component_and_controller();
+        }
+
+        self.attach_component_handler();
+        Ok(())
+    }
+
+    /// `IHostApplication` upcast to `FUnknown`, with a +1 refcount that the
+    /// plugin assumes ownership of via `IComponent::initialize`.
+    fn host_context_ptr(&self) -> Result<*mut FUnknown> {
+        Ok(self
             .host
             .application
             .to_com_ptr::<vst3::Steinberg::Vst::IHostApplication>()
@@ -538,20 +523,12 @@ impl Vst3Loaded {
                 code: 0,
             })?
             .upcast::<FUnknown>()
-            .into_raw();
+            .into_raw())
+    }
 
-        let result = unsafe { self.interfaces.component.initialize(host_ptr) };
-        if result != kResultOk && result != kResultFalse {
-            unsafe {
-                FUnknown::release(host_ptr);
-            }
-            return Err(Vst3Error::PluginError {
-                stage: LoadStage::Initialization,
-                code: result,
-            });
-        }
-
-        // Re-query bus counts — initialize may change them.
+    /// Re-query bus counts from the component — `initialize` may have changed
+    /// them (some plugins don't declare bus counts until after init).
+    fn reconcile_bus_counts(&mut self) {
         if let Some(ch) = get_bus_channel_count(&self.interfaces.component, K_INPUT, 0) {
             if ch != self.info.num_inputs {
                 self.info = self.info.clone().audio_io(ch, self.info.num_outputs);
@@ -562,30 +539,21 @@ impl Vst3Loaded {
                 self.info = self.info.clone().audio_io(self.info.num_inputs, ch);
             }
         }
+    }
 
-        let separate = self.interfaces.separate_controller;
-        if separate {
-            if let Some(ctrl) = &self.interfaces.controller {
-                unsafe {
-                    let _ = ctrl.initialize(host_ptr);
-                }
-            }
-            self.connect_component_and_controller();
-        }
-
-        if let Some(ctrl) = &self.interfaces.controller {
-            let handler_ptr: *mut vst3::Steinberg::Vst::IComponentHandler = self
-                .host
-                .handler
-                .as_com_ref::<vst3::Steinberg::Vst::IComponentHandler>()
-                .map(|r| r.as_ptr())
-                .unwrap_or(std::ptr::null_mut());
-            unsafe {
-                let _ = ctrl.setComponentHandler(handler_ptr);
-            }
-        }
-
-        Ok(())
+    /// Hand the controller our `IComponentHandler` so it can report param
+    /// edits, bus-activation requests, etc.
+    fn attach_component_handler(&self) {
+        let Some(ctrl) = &self.interfaces.controller else {
+            return;
+        };
+        let handler_ptr = self
+            .host
+            .handler
+            .as_com_ref::<vst3::Steinberg::Vst::IComponentHandler>()
+            .map(|r| r.as_ptr())
+            .unwrap_or(std::ptr::null_mut());
+        unsafe { let _ = ctrl.setComponentHandler(handler_ptr); }
     }
 }
 
@@ -604,6 +572,60 @@ impl Drop for Vst3Loaded {
 }
 
 // ── helpers ──
+
+fn check_exists(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Err(Vst3Error::LoadFailed {
+            path: path.to_path_buf(),
+            stage: LoadStage::Scanning,
+            reason: "Plugin file not found".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Assemble `PluginInfo` from already-queried interfaces. Used by both
+/// [`Vst3Loaded::probe`] (which may not own an `IAudioProcessor`) and
+/// [`Vst3Loaded::load_with_info`] (which does).
+fn build_plugin_info_raw(
+    library: &Vst3Library,
+    component: &ComPtr<IComponent>,
+    processor: Option<&ComPtr<IAudioProcessor>>,
+    name: &str,
+    class_cid_bytes: &[u8; 16],
+) -> PluginInfo {
+    let vendor = library
+        .get_factory_info()
+        .map(|info| info.vendor)
+        .unwrap_or_default();
+    let num_inputs = get_bus_channel_count(component, K_INPUT, 0).unwrap_or(0);
+    let num_outputs = get_bus_channel_count(component, K_OUTPUT, 1).unwrap_or(2);
+    let supports_f64 = processor
+        .map(|p| unsafe {
+            p.canProcessSampleSize(crate::types::K_SAMPLE_64_INT) == kResultOk
+        })
+        .unwrap_or(false);
+    let receives_midi =
+        unsafe { component.getBusCount(crate::host::instance::K_EVENT, K_INPUT) > 0 };
+
+    PluginInfo::new(format!("vst3.{}", cid_to_string(class_cid_bytes)), name.to_string())
+        .vendor(vendor)
+        .version("1.0.0".to_string())
+        .audio_io(num_inputs, num_outputs)
+        .midi(receives_midi)
+        .f64_support(supports_f64)
+}
+
+/// Convenience wrapper for the load path where we always have a processor.
+fn build_plugin_info(
+    library: &Vst3Library,
+    component: &ComPtr<IComponent>,
+    processor: &ComPtr<IAudioProcessor>,
+    name: &str,
+    class_cid_bytes: &[u8; 16],
+) -> PluginInfo {
+    build_plugin_info_raw(library, component, Some(processor), name, class_cid_bytes)
+}
 
 fn find_audio_class(
     library: &Vst3Library,

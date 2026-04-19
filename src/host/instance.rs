@@ -35,6 +35,40 @@ pub(super) const K_EVENT: i32 = kEvent as i32;
 const K_REALTIME: i32 = kRealtime as i32;
 const MIN_PTR_COUNT: usize = 2;
 
+fn empty_process_output() -> ProcessOutput {
+    ProcessOutput {
+        midi_events: SmallVec::new(),
+        parameter_changes: ParameterChanges::new(),
+    }
+}
+
+/// Build an `AudioBusBuffers` from a channel count and a
+/// raw pointer-array (produced by [`Sample::prepare_ffi_buffers`]).
+fn make_audio_bus(
+    num_channels: usize,
+    channel_ptrs: *mut *mut std::ffi::c_void,
+) -> vst3::Steinberg::Vst::AudioBusBuffers {
+    let mut bus: vst3::Steinberg::Vst::AudioBusBuffers = unsafe { std::mem::zeroed() };
+    bus.numChannels = num_channels as i32;
+    bus.silenceFlags = 0;
+    bus.__field0.channelBuffers32 = channel_ptrs as *mut *mut f32;
+    bus
+}
+
+fn event_list_ptr(list: &vst3::ComWrapper<EventList>) -> *mut IEventList {
+    list.as_com_ref::<IEventList>()
+        .map(|r| r.as_ptr())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+fn param_changes_ptr(
+    changes: Option<&vst3::ComWrapper<ParameterChangesImpl>>,
+) -> *mut IParameterChanges {
+    changes
+        .and_then(|c| c.as_com_ref::<IParameterChanges>().map(|r| r.as_ptr()))
+        .unwrap_or(std::ptr::null_mut())
+}
+
 /// Scratch buffers + event lists the realtime `process()` loop needs.
 /// Separated from [`Vst3Loaded`] so GUI-only hosting doesn't pay the cost.
 struct AudioIO {
@@ -168,24 +202,12 @@ impl Vst3Instance {
         note_expressions: &[NoteExpressionValue],
         transport: &TransportState,
     ) -> ProcessOutput {
-        let empty_result = ProcessOutput {
-            midi_events: SmallVec::new(),
-            parameter_changes: ParameterChanges::new(),
-        };
+        let empty_result = empty_process_output();
 
-        let processor = match &self.loaded.interfaces.processor {
-            Some(p) => p.clone(),
-            None => return empty_result,
-        };
-
-        if T::VST3_SYMBOLIC_SIZE == crate::types::K_SAMPLE_64_INT
-            && !self.loaded.info.supports_f64
-        {
+        let Some(processor) = self.loaded.interfaces.processor.clone() else {
             return empty_result;
-        }
-
-        let num_samples = buffer.num_samples;
-        if num_samples == 0 {
+        };
+        if !self.can_process::<T>() || buffer.num_samples == 0 {
             return empty_result;
         }
 
@@ -195,74 +217,36 @@ impl Vst3Instance {
             buffer.inputs,
             buffer.outputs,
         );
+        let mut input_bus = make_audio_bus(buffer.inputs.len(), input_ptrs);
+        let mut output_bus = make_audio_bus(buffer.outputs.len(), output_ptrs);
 
-        let mut input_bus: vst3::Steinberg::Vst::AudioBusBuffers = unsafe { std::mem::zeroed() };
-        input_bus.numChannels = buffer.inputs.len() as i32;
-        input_bus.silenceFlags = 0;
-        input_bus.__field0.channelBuffers32 = input_ptrs as *mut *mut f32;
-
-        let mut output_bus: vst3::Steinberg::Vst::AudioBusBuffers = unsafe { std::mem::zeroed() };
-        output_bus.numChannels = buffer.outputs.len() as i32;
-        output_bus.silenceFlags = 0;
-        output_bus.__field0.channelBuffers32 = output_ptrs as *mut *mut f32;
-
-        let has_events = !midi_events.is_empty() || !note_expressions.is_empty();
-        if has_events {
-            self.audio
-                .input_events
-                .update_from_midi_and_expression(midi_events, note_expressions);
-        } else {
-            self.audio.input_events.clear();
-        }
+        self.stage_input_events(midi_events, note_expressions);
         self.audio.output_events.clear();
-
-        let input_events_ptr: *mut IEventList = if has_events {
-            self.audio
-                .input_events
-                .as_com_ref::<IEventList>()
-                .map(|r| r.as_ptr())
-                .unwrap_or(std::ptr::null_mut())
-        } else {
-            std::ptr::null_mut()
-        };
-
-        let output_events_ptr: *mut IEventList = self
-            .audio
-            .output_events
-            .as_com_ref::<IEventList>()
-            .map(|r| r.as_ptr())
-            .unwrap_or(std::ptr::null_mut());
+        let input_events_ptr = event_list_ptr(&self.audio.input_events);
+        let output_events_ptr = event_list_ptr(&self.audio.output_events);
 
         let input_param_changes = param_changes
             .filter(|pc| !pc.is_empty())
             .map(ParameterChangesImpl::from_changes);
-        let input_param_changes_ptr = input_param_changes
-            .as_ref()
-            .and_then(|c| c.as_com_ref::<IParameterChanges>().map(|r| r.as_ptr()))
-            .unwrap_or(std::ptr::null_mut());
-
         let output_param_changes = ParameterChangesImpl::new_empty();
-        let output_param_changes_ptr = output_param_changes
-            .as_com_ref::<IParameterChanges>()
-            .map(|r| r.as_ptr())
-            .unwrap_or(std::ptr::null_mut());
 
         let mut process_context = transport.to_process_context();
         process_context.sampleRate = buffer.sample_rate;
 
-        let mut process_data: vst3::Steinberg::Vst::ProcessData = unsafe { std::mem::zeroed() };
-        process_data.processMode = K_REALTIME;
-        process_data.symbolicSampleSize = T::VST3_SYMBOLIC_SIZE;
-        process_data.numSamples = num_samples as i32;
-        process_data.numInputs = 1;
-        process_data.numOutputs = 1;
-        process_data.inputs = &mut input_bus;
-        process_data.outputs = &mut output_bus;
-        process_data.inputParameterChanges = input_param_changes_ptr;
-        process_data.outputParameterChanges = output_param_changes_ptr;
-        process_data.inputEvents = input_events_ptr;
-        process_data.outputEvents = output_events_ptr;
-        process_data.processContext = &mut process_context;
+        let mut process_data = vst3::Steinberg::Vst::ProcessData {
+            processMode: K_REALTIME,
+            symbolicSampleSize: T::VST3_SYMBOLIC_SIZE,
+            numSamples: buffer.num_samples as i32,
+            numInputs: 1,
+            numOutputs: 1,
+            inputs: &mut input_bus,
+            outputs: &mut output_bus,
+            inputParameterChanges: param_changes_ptr(input_param_changes.as_ref()),
+            outputParameterChanges: param_changes_ptr(Some(&output_param_changes)),
+            inputEvents: input_events_ptr,
+            outputEvents: output_events_ptr,
+            processContext: &mut process_context,
+        };
 
         let result = unsafe { processor.process(&mut process_data) };
 
@@ -271,12 +255,31 @@ impl Vst3Instance {
             return empty_result;
         }
 
-        let midi_out = self.audio.output_events.to_midi_events();
-        let param_out = output_param_changes.to_changes();
-
         ProcessOutput {
-            midi_events: midi_out,
-            parameter_changes: param_out,
+            midi_events: self.audio.output_events.to_midi_events(),
+            parameter_changes: output_param_changes.to_changes(),
+        }
+    }
+
+    /// True if this instance can process buffers of sample type `T`.
+    fn can_process<T: Sample>(&self) -> bool {
+        T::VST3_SYMBOLIC_SIZE != crate::types::K_SAMPLE_64_INT
+            || self.loaded.info.supports_f64
+    }
+
+    /// Load the input event list with MIDI + note-expression events for the
+    /// upcoming block, or clear it if there are none.
+    fn stage_input_events(
+        &mut self,
+        midi_events: &[MidiEvent],
+        note_expressions: &[NoteExpressionValue],
+    ) {
+        if midi_events.is_empty() && note_expressions.is_empty() {
+            self.audio.input_events.clear();
+        } else {
+            self.audio
+                .input_events
+                .update_from_midi_and_expression(midi_events, note_expressions);
         }
     }
 
