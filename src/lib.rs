@@ -8,7 +8,7 @@ pub mod host;
 pub mod types;
 
 pub use error::{LoadStage, Result, Vst3Error};
-pub use host::{Vst3Instance, Vst3Library};
+pub use host::{Vst3Instance, Vst3Library, Vst3Loaded};
 pub use types::{
     parameter_flags, vst3_event_from_midi, vst3_to_midi_event, AudioBuffer, BusInfo, EditorSize,
     MidiEvent, NoteExpressionType, NoteExpressionValue, ParameterChanges, ParameterPoint,
