@@ -207,3 +207,137 @@ pub fn vst3_to_note_expression(event: &Vst3Event) -> Option<NoteExpressionValue>
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! MIDI round-trip tests through `vst3_event_from_midi` + `vst3_to_midi_event`.
+    //!
+    //! Verifies each MIDI-1 message shape lands in the right VST3 event
+    //! variant (typed NoteOn/Off/PolyPressure vs. generic `Data`) and
+    //! round-trips back to an equivalent `MidiEvent`.
+
+    use super::*;
+
+    #[test]
+    fn note_on_lands_in_note_on_variant() {
+        let event = MidiEvent::note_on(0, 3, 60, 0x8000).with_frame_offset(5);
+        let vst3 = vst3_event_from_midi(&event).expect("NoteOn should convert");
+        match &vst3 {
+            Vst3Event::NoteOn(e) => {
+                assert_eq!(e.channel, 3);
+                assert_eq!(e.pitch, 60);
+                assert_eq!(e.header.sample_offset, 5);
+                assert!(e.velocity > 0.0, "expected non-zero velocity");
+            }
+            _ => panic!("expected NoteOn variant"),
+        }
+
+        let back = vst3_to_midi_event(&vst3).expect("round-trip");
+        assert!(back.is_note_on());
+        assert_eq!(back.note(), Some(60));
+        assert_eq!(back.frame_offset, 5);
+    }
+
+    #[test]
+    fn note_off_lands_in_note_off_variant() {
+        let event = MidiEvent::note_off(0, 0, 72, 0x4000).with_frame_offset(10);
+        let vst3 = vst3_event_from_midi(&event).expect("NoteOff should convert");
+        match &vst3 {
+            Vst3Event::NoteOff(e) => {
+                assert_eq!(e.pitch, 72);
+                assert_eq!(e.header.sample_offset, 10);
+            }
+            _ => panic!("expected NoteOff variant"),
+        }
+
+        let back = vst3_to_midi_event(&vst3).expect("round-trip");
+        assert!(back.is_note_off());
+        assert_eq!(back.note(), Some(72));
+    }
+
+    #[test]
+    fn poly_pressure_lands_in_poly_pressure_variant() {
+        use tutti_midi::convert::midi1_cc_to_midi2;
+        let event =
+            MidiEvent::poly_pressure(0, 1, 60, midi1_cc_to_midi2(100)).with_frame_offset(0);
+        let vst3 = vst3_event_from_midi(&event).expect("PolyPressure should convert");
+        assert!(matches!(vst3, Vst3Event::PolyPressure(_)));
+        let back = vst3_to_midi_event(&vst3).expect("round-trip");
+        assert_eq!(back.note(), Some(60));
+    }
+
+    #[test]
+    fn cc_falls_through_to_data_event() {
+        use tutti_midi::convert::midi1_cc_to_midi2;
+        let event = MidiEvent::cc(0, 2, 74, midi1_cc_to_midi2(100));
+        let vst3 = vst3_event_from_midi(&event).expect("CC should convert");
+        match &vst3 {
+            Vst3Event::Data(e) => {
+                assert_eq!(e.size, 3);
+                assert_eq!(e.bytes[0], 0xB0 | 2);
+                assert_eq!(e.bytes[1], 74);
+                assert_eq!(e.bytes[2], 100);
+            }
+            _ => panic!("expected Data variant for CC"),
+        }
+    }
+
+    #[test]
+    fn pitch_bend_falls_through_to_data_event() {
+        use tutti_midi::convert::midi1_pitch_bend_to_midi2;
+        let event = MidiEvent::pitch_bend(0, 0, midi1_pitch_bend_to_midi2(8192));
+        let vst3 = vst3_event_from_midi(&event).expect("PitchBend should convert");
+        match &vst3 {
+            Vst3Event::Data(e) => {
+                assert_eq!(e.size, 3);
+                assert_eq!(e.bytes[0] & 0xF0, 0xE0);
+                let value = (e.bytes[1] as u16) | ((e.bytes[2] as u16) << 7);
+                assert_eq!(value, 8192, "PitchBend should round-trip to center");
+            }
+            _ => panic!("expected Data variant for PitchBend"),
+        }
+    }
+
+    #[test]
+    fn program_change_falls_through_to_data_event() {
+        let event = MidiEvent::program_change(0, 9, 42, None);
+        let vst3 = vst3_event_from_midi(&event).expect("ProgramChange should convert");
+        match &vst3 {
+            Vst3Event::Data(e) => {
+                assert_eq!(e.size, 3);
+                assert_eq!(e.bytes[0], 0xC0 | 9);
+                assert_eq!(e.bytes[1], 42);
+            }
+            _ => panic!("expected Data variant for ProgramChange"),
+        }
+    }
+
+    #[test]
+    fn note_expression_is_not_a_midi_event() {
+        let expr = NoteExpressionValue {
+            sample_offset: 0,
+            note_id: 1,
+            expression_type: NoteExpressionType::Tuning,
+            value: 0.5,
+        };
+        let vst3 = expr.to_vst3_event();
+        assert!(vst3_to_midi_event(&vst3).is_none());
+    }
+
+    #[test]
+    fn data_event_with_truncated_size_fails_gracefully() {
+        let e = DataEvent {
+            header: EventHeader {
+                bus_index: 0,
+                sample_offset: 0,
+                ppq_position: 0.0,
+                flags: 0,
+                event_type: K_DATA_EVENT,
+            },
+            size: 1,
+            event_type: 0,
+            bytes: [0xB0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        };
+        assert!(vst3_to_midi_event(&Vst3Event::Data(e)).is_none());
+    }
+}
