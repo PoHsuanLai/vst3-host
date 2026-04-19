@@ -1,52 +1,41 @@
 //! IParamValueQueue COM implementation.
 
-use std::ffi::c_void;
-use std::sync::atomic::AtomicU32;
+use parking_lot::Mutex;
+use vst3::{Class, ComWrapper};
+use vst3::Steinberg::{
+    kInvalidArgument, kResultOk, tresult,
+    Vst::{IParamValueQueue, IParamValueQueueTrait},
+};
 
-use super::{com_add_ref, com_release, HasRefCount};
-use crate::ffi::{IParamValueQueueVtable, K_RESULT_OK};
 use crate::types::{ParameterPoint, ParameterQueue};
 
-#[repr(C)]
 pub struct ParamValueQueueImpl {
-    #[allow(dead_code)] // Accessed via raw pointer in COM vtable
-    vtable: *const IParamValueQueueVtable,
-    ref_count: AtomicU32,
     param_id: u32,
-    points: Vec<ParameterPoint>,
+    points: Mutex<Vec<ParameterPoint>>,
 }
 
-unsafe impl Send for ParamValueQueueImpl {}
-unsafe impl Sync for ParamValueQueueImpl {}
-
-impl HasRefCount for ParamValueQueueImpl {
-    fn ref_count(&self) -> &AtomicU32 {
-        &self.ref_count
-    }
+impl Class for ParamValueQueueImpl {
+    type Interfaces = (IParamValueQueue,);
 }
 
 impl ParamValueQueueImpl {
-    pub fn from_queue(queue: &ParameterQueue) -> Box<Self> {
-        Box::new(ParamValueQueueImpl {
-            vtable: &PARAM_VALUE_QUEUE_VTABLE,
-            ref_count: AtomicU32::new(1),
+    pub fn from_queue(queue: &ParameterQueue) -> ComWrapper<Self> {
+        ComWrapper::new(Self {
             param_id: queue.param_id,
-            points: queue.points.to_vec(),
+            points: Mutex::new(queue.points.to_vec()),
         })
     }
 
-    pub fn new_empty(param_id: u32) -> Box<Self> {
-        Box::new(ParamValueQueueImpl {
-            vtable: &PARAM_VALUE_QUEUE_VTABLE,
-            ref_count: AtomicU32::new(1),
+    pub fn new_empty(param_id: u32) -> ComWrapper<Self> {
+        ComWrapper::new(Self {
             param_id,
-            points: Vec::with_capacity(16),
+            points: Mutex::new(Vec::with_capacity(16)),
         })
     }
 
     pub fn to_queue(&self) -> ParameterQueue {
         let mut queue = ParameterQueue::new(self.param_id);
-        for point in &self.points {
+        for point in self.points.lock().iter() {
             queue.add_point(point.sample_offset, point.value);
         }
         queue
@@ -57,80 +46,52 @@ impl ParamValueQueueImpl {
     }
 
     pub fn len(&self) -> usize {
-        self.points.len()
+        self.points.lock().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.points.is_empty()
+        self.points.lock().is_empty()
     }
 }
 
-static PARAM_VALUE_QUEUE_VTABLE: IParamValueQueueVtable = IParamValueQueueVtable {
-    query_interface: param_queue_query_interface,
-    add_ref: param_queue_add_ref,
-    release: param_queue_release,
-    get_parameter_id: param_queue_get_parameter_id,
-    get_point_count: param_queue_get_point_count,
-    get_point: param_queue_get_point,
-    add_point: param_queue_add_point,
-};
-
-unsafe extern "system" fn param_queue_query_interface(
-    this: *mut c_void,
-    _iid: *const [u8; 16],
-    obj: *mut *mut c_void,
-) -> i32 {
-    *obj = this;
-    param_queue_add_ref(this);
-    K_RESULT_OK
-}
-
-unsafe extern "system" fn param_queue_add_ref(this: *mut c_void) -> u32 {
-    com_add_ref::<ParamValueQueueImpl>(this)
-}
-
-unsafe extern "system" fn param_queue_release(this: *mut c_void) -> u32 {
-    com_release::<ParamValueQueueImpl>(this)
-}
-
-unsafe extern "system" fn param_queue_get_parameter_id(this: *mut c_void) -> u32 {
-    let queue = &*(this as *const ParamValueQueueImpl);
-    queue.param_id
-}
-
-unsafe extern "system" fn param_queue_get_point_count(this: *mut c_void) -> i32 {
-    let queue = &*(this as *const ParamValueQueueImpl);
-    queue.points.len() as i32
-}
-
-unsafe extern "system" fn param_queue_get_point(
-    this: *mut c_void,
-    index: i32,
-    sample_offset: *mut i32,
-    value: *mut f64,
-) -> i32 {
-    let queue = &*(this as *const ParamValueQueueImpl);
-    if index < 0 || index >= queue.points.len() as i32 {
-        return -1;
+impl IParamValueQueueTrait for ParamValueQueueImpl {
+    unsafe fn getParameterId(&self) -> u32 {
+        self.param_id
     }
 
-    let point = &queue.points[index as usize];
-    *sample_offset = point.sample_offset;
-    *value = point.value;
-    K_RESULT_OK
-}
+    unsafe fn getPointCount(&self) -> i32 {
+        self.points.lock().len() as i32
+    }
 
-unsafe extern "system" fn param_queue_add_point(
-    this: *mut c_void,
-    sample_offset: i32,
-    value: f64,
-    index: *mut i32,
-) -> i32 {
-    let queue = &mut *(this as *mut ParamValueQueueImpl);
-    queue.points.push(ParameterPoint {
-        sample_offset,
-        value,
-    });
-    *index = (queue.points.len() - 1) as i32;
-    K_RESULT_OK
+    unsafe fn getPoint(&self, index: i32, sample_offset: *mut i32, value: *mut f64) -> tresult {
+        let points = self.points.lock();
+        if index < 0 || index >= points.len() as i32 {
+            return kInvalidArgument;
+        }
+        let point = &points[index as usize];
+        if !sample_offset.is_null() {
+            *sample_offset = point.sample_offset;
+        }
+        if !value.is_null() {
+            *value = point.value;
+        }
+        kResultOk
+    }
+
+    unsafe fn addPoint(
+        &self,
+        sample_offset: i32,
+        value: f64,
+        index: *mut i32,
+    ) -> tresult {
+        let mut points = self.points.lock();
+        points.push(ParameterPoint {
+            sample_offset,
+            value,
+        });
+        if !index.is_null() {
+            *index = (points.len() - 1) as i32;
+        }
+        kResultOk
+    }
 }

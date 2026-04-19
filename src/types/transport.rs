@@ -1,9 +1,6 @@
 //! Transport state for plugin processing.
 
-use crate::ffi::{
-    ProcessContext, K_BAR_POSITION_VALID, K_CYCLE_ACTIVE, K_CYCLE_VALID, K_PLAYING,
-    K_PROJECT_TIME_MUSIC_VALID, K_RECORDING, K_TEMPO_VALID, K_TIME_SIG_VALID,
-};
+use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_;
 
 #[derive(Debug, Clone)]
 pub struct TransportState {
@@ -103,39 +100,46 @@ impl TransportState {
         self
     }
 
-    pub fn to_process_context(&self) -> ProcessContext {
-        let mut state = 0u32;
+    pub fn to_process_context(&self) -> vst3::Steinberg::Vst::ProcessContext {
+        // `StatesAndFlags_::*` is `u32` on unix, `c_int` (i32) on Windows — the casts
+        // below are no-ops on one target and sign-changes on the other. Cleanest is
+        // to normalise to `u32` at the edge.
+        #[allow(clippy::unnecessary_cast)]
+        let state_bits = {
+            let mut state = 0u32;
+            if self.playing {
+                state |= StatesAndFlags_::kPlaying as u32;
+            }
+            if self.recording {
+                state |= StatesAndFlags_::kRecording as u32;
+            }
+            if self.cycle_active {
+                state |= (StatesAndFlags_::kCycleActive as u32)
+                    | (StatesAndFlags_::kCycleValid as u32);
+            }
+            state |= (StatesAndFlags_::kProjectTimeMusicValid as u32)
+                | (StatesAndFlags_::kBarPositionValid as u32)
+                | (StatesAndFlags_::kTempoValid as u32)
+                | (StatesAndFlags_::kTimeSigValid as u32);
+            state
+        };
+        let state = state_bits;
 
-        if self.playing {
-            state |= K_PLAYING;
-        }
-        if self.recording {
-            state |= K_RECORDING;
-        }
-        if self.cycle_active {
-            state |= K_CYCLE_ACTIVE | K_CYCLE_VALID;
-        }
-
-        state |=
-            K_PROJECT_TIME_MUSIC_VALID | K_BAR_POSITION_VALID | K_TEMPO_VALID | K_TIME_SIG_VALID;
-
-        ProcessContext {
-            state,
-            sample_rate: self.sample_rate,
-            project_time_samples: self.position_samples,
-            system_time: 0,
-            continuous_time_samples: self.position_samples,
-            project_time_music: self.position_beats,
-            bar_position_music: self.bar_position_beats,
-            cycle_start_music: self.cycle_start_beats,
-            cycle_end_music: self.cycle_end_beats,
-            tempo: self.tempo,
-            time_sig_numerator: self.time_sig_numerator,
-            time_sig_denominator: self.time_sig_denominator,
-            chord: [0; 12],
-            smpte_offset_subframes: 0,
-            frame_rate: 0,
-            samples_to_next_clock: 0,
-        }
+        let mut ctx: vst3::Steinberg::Vst::ProcessContext = unsafe { std::mem::zeroed() };
+        ctx.state = state;
+        ctx.sampleRate = self.sample_rate;
+        ctx.projectTimeSamples = self.position_samples;
+        ctx.systemTime = 0;
+        ctx.continousTimeSamples = self.position_samples;
+        ctx.projectTimeMusic = self.position_beats;
+        ctx.barPositionMusic = self.bar_position_beats;
+        ctx.cycleStartMusic = self.cycle_start_beats;
+        ctx.cycleEndMusic = self.cycle_end_beats;
+        ctx.tempo = self.tempo;
+        ctx.timeSigNumerator = self.time_sig_numerator;
+        ctx.timeSigDenominator = self.time_sig_denominator;
+        ctx.smpteOffsetSubframes = 0;
+        ctx.samplesToNextClock = 0;
+        ctx
     }
 }

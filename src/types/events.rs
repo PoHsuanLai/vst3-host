@@ -6,23 +6,248 @@
 //! bridge it to the workspace's canonical [`tutti_midi::MidiEvent`] UMP
 //! type: one `MidiEvent` → one `Vst3Event`, round-trippable.
 
-use crate::ffi::{
-    DataEvent, EventHeader, NoteExpressionValueEvent, NoteOffEvent, NoteOnEvent, PolyPressureEvent,
-    Vst3Event, K_DATA_EVENT, K_NOTE_EXPRESSION_VALUE_EVENT, K_NOTE_OFF_EVENT, K_NOTE_ON_EVENT,
-    K_POLY_PRESSURE_EVENT,
-};
-
 pub use tutti_midi::MidiEvent;
 
+use vst3::Steinberg::Vst::Event_::EventTypes_;
+
+pub const K_NOTE_ON_EVENT: u16 = EventTypes_::kNoteOnEvent as u16;
+pub const K_NOTE_OFF_EVENT: u16 = EventTypes_::kNoteOffEvent as u16;
+pub const K_DATA_EVENT: u16 = EventTypes_::kDataEvent as u16;
+pub const K_POLY_PRESSURE_EVENT: u16 = EventTypes_::kPolyPressureEvent as u16;
+pub const K_NOTE_EXPRESSION_VALUE_EVENT: u16 = EventTypes_::kNoteExpressionValueEvent as u16;
+
+/// Flat Rust-facing header — merges the `busIndex/sampleOffset/ppqPosition/flags/type_`
+/// fields of `vst3::Steinberg::Vst::Event` so callers can construct events literally.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EventHeader {
+    pub bus_index: i32,
+    pub sample_offset: i32,
+    pub ppq_position: f64,
+    pub flags: u16,
+    pub event_type: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NoteOnEvent {
+    pub header: EventHeader,
+    pub channel: i16,
+    pub pitch: i16,
+    pub tuning: f32,
+    pub velocity: f32,
+    pub length: i32,
+    pub note_id: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NoteOffEvent {
+    pub header: EventHeader,
+    pub channel: i16,
+    pub pitch: i16,
+    pub velocity: f32,
+    pub note_id: i32,
+    pub tuning: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DataEvent {
+    pub header: EventHeader,
+    pub size: u32,
+    pub event_type: u32,
+    /// Only the first `size` bytes are valid.
+    pub bytes: [u8; 16],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PolyPressureEvent {
+    pub header: EventHeader,
+    pub channel: i16,
+    pub pitch: i16,
+    pub pressure: f32,
+    pub note_id: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NoteExpressionValueEvent {
+    pub header: EventHeader,
+    pub note_id: i32,
+    /// 0=volume, 1=pan, 2=tuning, 3=vibrato, 4=brightness.
+    pub type_id: u32,
+    /// 0.0 to 1.0, meaning depends on type_id.
+    pub value: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Vst3Event {
+    NoteOn(NoteOnEvent),
+    NoteOff(NoteOffEvent),
+    Data(DataEvent),
+    PolyPressure(PolyPressureEvent),
+    NoteExpression(NoteExpressionValueEvent),
+}
+
+impl Vst3Event {
+    pub fn sample_offset(&self) -> i32 {
+        match self {
+            Vst3Event::NoteOn(e) => e.header.sample_offset,
+            Vst3Event::NoteOff(e) => e.header.sample_offset,
+            Vst3Event::Data(e) => e.header.sample_offset,
+            Vst3Event::PolyPressure(e) => e.header.sample_offset,
+            Vst3Event::NoteExpression(e) => e.header.sample_offset,
+        }
+    }
+}
+
+/// Convert our flat `Vst3Event` into the C `Event` struct the vst3 crate expects.
+///
+/// `data_storage` acts as an owner for the `DataEvent.bytes` pointer: when a
+/// `Data` event is encoded, the buffer is pushed into `data_storage` and the
+/// event's `bytes` field points at the most-recently-pushed slot. Callers must
+/// keep `data_storage` alive at least as long as the returned `Event` is used.
+pub(crate) fn to_c_event(
+    event: &Vst3Event,
+    data_storage: &mut smallvec::SmallVec<[[u8; 16]; 8]>,
+) -> vst3::Steinberg::Vst::Event {
+    let header = match event {
+        Vst3Event::NoteOn(e) => &e.header,
+        Vst3Event::NoteOff(e) => &e.header,
+        Vst3Event::Data(e) => &e.header,
+        Vst3Event::PolyPressure(e) => &e.header,
+        Vst3Event::NoteExpression(e) => &e.header,
+    };
+
+    let mut out: vst3::Steinberg::Vst::Event = unsafe { std::mem::zeroed() };
+    out.busIndex = header.bus_index;
+    out.sampleOffset = header.sample_offset;
+    out.ppqPosition = header.ppq_position;
+    out.flags = header.flags;
+    out.r#type = header.event_type;
+
+    match event {
+        Vst3Event::NoteOn(e) => {
+            out.__field0.noteOn = vst3::Steinberg::Vst::NoteOnEvent {
+                channel: e.channel,
+                pitch: e.pitch,
+                tuning: e.tuning,
+                velocity: e.velocity,
+                length: e.length,
+                noteId: e.note_id,
+            };
+        }
+        Vst3Event::NoteOff(e) => {
+            out.__field0.noteOff = vst3::Steinberg::Vst::NoteOffEvent {
+                channel: e.channel,
+                pitch: e.pitch,
+                velocity: e.velocity,
+                noteId: e.note_id,
+                tuning: e.tuning,
+            };
+        }
+        Vst3Event::Data(e) => {
+            data_storage.push(e.bytes);
+            let slot = data_storage.last().expect("just pushed");
+            out.__field0.data = vst3::Steinberg::Vst::DataEvent {
+                size: e.size,
+                r#type: e.event_type,
+                bytes: slot.as_ptr(),
+            };
+        }
+        Vst3Event::PolyPressure(e) => {
+            out.__field0.polyPressure = vst3::Steinberg::Vst::PolyPressureEvent {
+                channel: e.channel,
+                pitch: e.pitch,
+                pressure: e.pressure,
+                noteId: e.note_id,
+            };
+        }
+        Vst3Event::NoteExpression(e) => {
+            out.__field0.noteExpressionValue = vst3::Steinberg::Vst::NoteExpressionValueEvent {
+                typeId: e.type_id,
+                noteId: e.note_id,
+                value: e.value,
+            };
+        }
+    }
+
+    out
+}
+
+/// Convert from the vst3 crate's tagged-union `Event` to our safe enum.
+///
+/// # Safety
+///
+/// `event.type_` must accurately label the variant stored in `__field0`.
+#[allow(clippy::unnecessary_cast)]
+pub(crate) unsafe fn from_c_event(event: &vst3::Steinberg::Vst::Event) -> Option<Vst3Event> {
+    let header = EventHeader {
+        bus_index: event.busIndex,
+        sample_offset: event.sampleOffset,
+        ppq_position: event.ppqPosition,
+        flags: event.flags,
+        event_type: event.r#type,
+    };
+
+    match event.r#type as u32 {
+        t if t == EventTypes_::kNoteOnEvent as u32 => {
+            let e = event.__field0.noteOn;
+            Some(Vst3Event::NoteOn(NoteOnEvent {
+                header,
+                channel: e.channel,
+                pitch: e.pitch,
+                tuning: e.tuning,
+                velocity: e.velocity,
+                length: e.length,
+                note_id: e.noteId,
+            }))
+        }
+        t if t == EventTypes_::kNoteOffEvent as u32 => {
+            let e = event.__field0.noteOff;
+            Some(Vst3Event::NoteOff(NoteOffEvent {
+                header,
+                channel: e.channel,
+                pitch: e.pitch,
+                velocity: e.velocity,
+                note_id: e.noteId,
+                tuning: e.tuning,
+            }))
+        }
+        t if t == EventTypes_::kDataEvent as u32 => {
+            let e = event.__field0.data;
+            let mut bytes = [0u8; 16];
+            if !e.bytes.is_null() && e.size > 0 {
+                let copy_len = (e.size as usize).min(bytes.len());
+                std::ptr::copy_nonoverlapping(e.bytes, bytes.as_mut_ptr(), copy_len);
+            }
+            Some(Vst3Event::Data(DataEvent {
+                header,
+                size: e.size.min(16),
+                event_type: e.r#type,
+                bytes,
+            }))
+        }
+        t if t == EventTypes_::kPolyPressureEvent as u32 => {
+            let e = event.__field0.polyPressure;
+            Some(Vst3Event::PolyPressure(PolyPressureEvent {
+                header,
+                channel: e.channel,
+                pitch: e.pitch,
+                pressure: e.pressure,
+                note_id: e.noteId,
+            }))
+        }
+        t if t == EventTypes_::kNoteExpressionValueEvent as u32 => {
+            let e = event.__field0.noteExpressionValue;
+            Some(Vst3Event::NoteExpression(NoteExpressionValueEvent {
+                header,
+                note_id: e.noteId,
+                type_id: e.typeId,
+                value: e.value,
+            }))
+        }
+        _ => None,
+    }
+}
+
 /// Build a [`Vst3Event`] from a Tutti UMP [`MidiEvent`].
-///
-/// NoteOn/NoteOff/PolyPressure go to VST3's typed event structs (velocity
-/// and pressure are MIDI-1 u7 values divided by 127 into the VST3 f32 unit
-/// range). Everything else (CC, ProgramChange, ChannelPressure, PitchBend)
-/// becomes a generic `Data` event carrying the 3-byte MIDI-1 wire form.
-///
-/// Returns `None` for UMP variants with no MIDI-1 wire representation
-/// (per-note controllers, SysEx, utility).
 pub fn vst3_event_from_midi(event: &MidiEvent) -> Option<Vst3Event> {
     let (bytes, _len) = event.to_midi1_bytes()?;
     let sample_offset = event.frame_offset as i32;
@@ -89,14 +314,6 @@ pub fn vst3_event_from_midi(event: &MidiEvent) -> Option<Vst3Event> {
 }
 
 /// Convert a [`Vst3Event`] back to a Tutti UMP [`MidiEvent`].
-///
-/// Typed NoteOn/NoteOff/PolyPressure events are re-encoded to MIDI-1 wire
-/// bytes (with VST3's f32 unit range scaled back to u7); `Data` events
-/// pass their bytes through. [`MidiEvent::from_midi1_bytes`] then does the
-/// MIDI 1.0 → 2.0 resolution upconversion.
-///
-/// Returns `None` for VST3 event types with no MIDI-1 equivalent
-/// (`NoteExpression`).
 pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
     match event {
         Vst3Event::NoteOn(e) => {
@@ -211,10 +428,6 @@ pub fn vst3_to_note_expression(event: &Vst3Event) -> Option<NoteExpressionValue>
 #[cfg(test)]
 mod tests {
     //! MIDI round-trip tests through `vst3_event_from_midi` + `vst3_to_midi_event`.
-    //!
-    //! Verifies each MIDI-1 message shape lands in the right VST3 event
-    //! variant (typed NoteOn/Off/PolyPressure vs. generic `Data`) and
-    //! round-trips back to an equivalent `MidiEvent`.
 
     use super::*;
 

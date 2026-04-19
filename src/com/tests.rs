@@ -1,16 +1,24 @@
-//! Unit tests for VST3 COM implementations.
+//! Behavior tests for VST3 COM implementations.
+//!
+//! These drive our handler objects through the `vst3` crate's safe
+//! `ComPtr` / `IFooTrait` surface, exactly how a plugin would reach them.
 
 use std::ffi::c_void;
 use std::time::Duration;
+
+use vst3::Steinberg::{
+    kResultOk, IBStream, IBStreamTrait,
+    Vst::{
+        DataExchangeBlock, IComponentHandler, IComponentHandlerTrait, IDataExchangeHandler,
+        IDataExchangeHandlerTrait, IParameterChanges, IParameterChangesTrait, IProgress,
+        IProgressTrait, IUnitHandler, IUnitHandlerTrait,
+    },
+};
 
 use super::{
     BStream, ComponentHandler, ConnectionPoint, DataExchangeHandler, EventList, HostApplication,
     ParamValueQueueImpl, ParameterChangesImpl, ParameterEditEvent, ProgressEvent, ProgressHandler,
     UnitEvent, UnitHandler,
-};
-use crate::ffi::{
-    DataExchangeBlock, IBStreamVtable, IComponentHandlerVtable, IDataExchangeHandlerVtable,
-    IEventListVtable, IParameterChangesVtable, IProgressVtable, IUnitHandlerVtable, K_RESULT_OK,
 };
 use crate::types::{ParameterChanges, ParameterQueue};
 
@@ -28,28 +36,8 @@ fn test_bstream_from_data() {
 }
 
 #[test]
-fn test_bstream_into_data() {
-    let data = vec![10, 20, 30];
-    let stream = BStream::from_data(data.clone());
-    assert_eq!(stream.into_data(), data);
-}
-
-#[test]
-fn test_bstream_default() {
-    let stream = BStream::default();
-    assert_eq!(stream.data(), Vec::<u8>::new());
-}
-
-#[test]
 fn test_host_application_new() {
     let _host = HostApplication::new("TestHost");
-}
-
-#[test]
-fn test_host_application_as_ptr() {
-    let host = HostApplication::new("DAWAI");
-    let ptr = host.as_ptr();
-    assert!(!ptr.is_null());
 }
 
 #[test]
@@ -60,27 +48,23 @@ fn test_host_application_long_name_truncates() {
 
 #[test]
 fn test_component_handler_new() {
-    let (handler, _rx, _prx, _urx) = ComponentHandler::new();
-    assert!(!handler.as_ptr().is_null());
+    let (_handler, _rx, _prx, _urx) = ComponentHandler::new();
 }
 
 #[test]
 fn test_component_handler_events() {
     let (handler, rx, _prx, _urx) = ComponentHandler::new();
-    let ptr = handler.as_ptr();
+    let ptr = handler.to_com_ptr::<IComponentHandler>().unwrap();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IComponentHandlerVtable);
-        let vtable = &*vtable_ptr;
+        let result = ptr.beginEdit(42);
+        assert_eq!(result, kResultOk);
 
-        let result = (vtable.begin_edit)(ptr, 42);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.performEdit(42, 0.75);
+        assert_eq!(result, kResultOk);
 
-        let result = (vtable.perform_edit)(ptr, 42, 0.75);
-        assert_eq!(result, K_RESULT_OK);
-
-        let result = (vtable.end_edit)(ptr, 42);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.endEdit(42);
+        assert_eq!(result, kResultOk);
     }
 
     let event1 = rx.recv_timeout(Duration::from_millis(100)).unwrap();
@@ -102,49 +86,39 @@ fn test_component_handler_events() {
 #[test]
 fn test_component_handler_restart() {
     let (handler, rx, _prx, _urx) = ComponentHandler::new();
-    let ptr = handler.as_ptr();
+    let ptr = handler.to_com_ptr::<IComponentHandler>().unwrap();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IComponentHandlerVtable);
-        let vtable = &*vtable_ptr;
-
-        let result = (vtable.restart_component)(ptr, 0b1010);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.restartComponent(0b1010);
+        assert_eq!(result, kResultOk);
     }
 
     let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
-    assert!(matches!(
-        event,
-        ParameterEditEvent::RestartComponent(0b1010)
-    ));
+    assert!(matches!(event, ParameterEditEvent::RestartComponent(0b1010)));
 }
 
 #[test]
 fn test_progress_handler_new() {
-    let (handler, _rx) = ProgressHandler::new();
-    assert!(!handler.as_ptr().is_null());
+    let (_handler, _rx) = ProgressHandler::new();
 }
 
 #[test]
 fn test_progress_handler_events() {
     let (handler, rx) = ProgressHandler::new();
-    let ptr = handler.as_ptr();
+    let ptr = handler.to_com_ptr::<IProgress>().unwrap();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IProgressVtable);
-        let vtable = &*vtable_ptr;
-
         let mut out_id: u64 = 0;
         let desc: [u16; 5] = [b'T' as u16, b'e' as u16, b's' as u16, b't' as u16, 0];
-        let result = (vtable.start)(ptr, 1, desc.as_ptr(), &mut out_id);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.start(1, desc.as_ptr(), &mut out_id);
+        assert_eq!(result, kResultOk);
         assert_eq!(out_id, 1);
 
-        let result = (vtable.update)(ptr, out_id, 0.5);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.update(out_id, 0.5);
+        assert_eq!(result, kResultOk);
 
-        let result = (vtable.finish)(ptr, out_id);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.finish(out_id);
+        assert_eq!(result, kResultOk);
     }
 
     let event1 = rx.recv_timeout(Duration::from_millis(100)).unwrap();
@@ -176,23 +150,17 @@ fn test_progress_handler_events() {
 
 #[test]
 fn test_unit_handler_new() {
-    let (handler, _rx) = UnitHandler::new();
-    assert!(!handler.as_ptr().is_null());
+    let (_handler, _rx) = UnitHandler::new();
 }
 
 #[test]
 fn test_unit_handler_selection() {
     let (handler, rx) = UnitHandler::new();
-    let ptr = handler.as_ptr();
-
+    let ptr = handler.to_com_ptr::<IUnitHandler>().unwrap();
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IUnitHandlerVtable);
-        let vtable = &*vtable_ptr;
-
-        let result = (vtable.notify_unit_selection)(ptr, 5);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.notifyUnitSelection(5);
+        assert_eq!(result, kResultOk);
     }
-
     let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
     assert!(matches!(event, UnitEvent::UnitSelected(5)));
 }
@@ -200,16 +168,11 @@ fn test_unit_handler_selection() {
 #[test]
 fn test_unit_handler_program_list() {
     let (handler, rx) = UnitHandler::new();
-    let ptr = handler.as_ptr();
-
+    let ptr = handler.to_com_ptr::<IUnitHandler>().unwrap();
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IUnitHandlerVtable);
-        let vtable = &*vtable_ptr;
-
-        let result = (vtable.notify_program_list_change)(ptr, 10, 3);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.notifyProgramListChange(10, 3);
+        assert_eq!(result, kResultOk);
     }
-
     let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
     match event {
         UnitEvent::ProgramListChanged {
@@ -225,50 +188,40 @@ fn test_unit_handler_program_list() {
 
 #[test]
 fn test_data_exchange_handler_new() {
-    let (handler, _rx) = DataExchangeHandler::new();
-    assert!(!handler.as_ptr().is_null());
+    let (_handler, _rx) = DataExchangeHandler::new();
 }
 
 #[test]
 fn test_data_exchange_open_close_queue() {
     let (handler, _rx) = DataExchangeHandler::new();
-    let ptr = handler.as_ptr();
-
+    let ptr = handler.to_com_ptr::<IDataExchangeHandler>().unwrap();
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IDataExchangeHandlerVtable);
-        let vtable = &*vtable_ptr;
-
         let mut queue_id: u32 = 0;
-        let result =
-            (vtable.open_queue)(ptr, std::ptr::null_mut(), 1024, 4, 16, 100, &mut queue_id);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.openQueue(std::ptr::null_mut(), 1024, 4, 16, 100, &mut queue_id);
+        assert_eq!(result, kResultOk);
         assert_eq!(queue_id, 1);
 
-        let result = (vtable.close_queue)(ptr, 100);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.closeQueue(100);
+        assert_eq!(result, kResultOk);
     }
 }
 
 #[test]
 fn test_data_exchange_lock_free_block() {
     let (handler, rx) = DataExchangeHandler::new();
-    let ptr = handler.as_ptr();
-
+    let ptr = handler.to_com_ptr::<IDataExchangeHandler>().unwrap();
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IDataExchangeHandlerVtable);
-        let vtable = &*vtable_ptr;
-
         let mut queue_id: u32 = 0;
-        let result = (vtable.open_queue)(ptr, std::ptr::null_mut(), 64, 2, 1, 42, &mut queue_id);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.openQueue(std::ptr::null_mut(), 64, 2, 1, 42, &mut queue_id);
+        assert_eq!(result, kResultOk);
 
         let mut block = DataExchangeBlock {
             data: std::ptr::null_mut(),
             size: 0,
-            block_id: 0,
+            blockID: 0,
         };
-        let result = (vtable.lock_block)(ptr, 42, &mut block);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.lockBlock(42, &mut block);
+        assert_eq!(result, kResultOk);
         assert_eq!(block.size, 64);
         assert!(!block.data.is_null());
 
@@ -276,8 +229,8 @@ fn test_data_exchange_lock_free_block() {
         data_slice[0] = 0xAB;
         data_slice[1] = 0xCD;
 
-        let result = (vtable.free_block)(ptr, 42, block.block_id, 1);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.freeBlock(42, block.blockID, 1);
+        assert_eq!(result, kResultOk);
     }
 
     let data_block = rx.recv_timeout(Duration::from_millis(100)).unwrap();
@@ -288,42 +241,29 @@ fn test_data_exchange_lock_free_block() {
 
 #[test]
 fn test_event_list_new() {
-    let mut event_list = EventList::new();
-    assert!(!event_list.as_ptr().is_null());
+    let _list = EventList::new();
 }
 
 #[test]
 fn test_event_list_update_from_midi_counts_correctly() {
     use crate::types::MidiEvent;
-    let mut event_list = EventList::new();
+    let list = EventList::new();
     let midi_events = [MidiEvent::note_on(0, 0, 60, 0x8000).with_frame_offset(0)];
-    event_list.update_from_midi(&midi_events);
-
-    unsafe {
-        let ptr = event_list.as_ptr();
-        let vtable_ptr = *(ptr as *const *const IEventListVtable);
-        let vtable = &*vtable_ptr;
-        assert_eq!((vtable.get_event_count)(ptr), 1);
-    }
+    list.update_from_midi(&midi_events);
+    assert_eq!(list.len(), 1);
 }
 
 #[test]
 fn test_event_list_clear_after_update_from_midi() {
     use crate::types::MidiEvent;
-    let mut event_list = EventList::new();
+    let list = EventList::new();
     let midi_events = [
         MidiEvent::note_on(0, 0, 60, 0x8000).with_frame_offset(0),
         MidiEvent::note_off(0, 0, 60, 0).with_frame_offset(10),
     ];
-    event_list.update_from_midi(&midi_events);
-    event_list.clear();
-
-    unsafe {
-        let ptr = event_list.as_ptr();
-        let vtable_ptr = *(ptr as *const *const IEventListVtable);
-        let vtable = &*vtable_ptr;
-        assert_eq!((vtable.get_event_count)(ptr), 0);
-    }
+    list.update_from_midi(&midi_events);
+    list.clear();
+    assert_eq!(list.len(), 0);
 }
 
 #[test]
@@ -377,99 +317,53 @@ fn test_parameter_changes_from_changes() {
 
 #[test]
 fn test_parameter_changes_vtable() {
-    let mut impl_changes = ParameterChangesImpl::new_empty();
-    let ptr = impl_changes.as_ptr();
+    let impl_changes = ParameterChangesImpl::new_empty();
+    let ptr = impl_changes.to_com_ptr::<IParameterChanges>().unwrap();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IParameterChangesVtable);
-        let vtable = &*vtable_ptr;
-
-        let count = (vtable.get_parameter_count)(ptr);
-        assert_eq!(count, 0);
+        assert_eq!(ptr.getParameterCount(), 0);
 
         let param_id: u32 = 42;
         let mut index: i32 = -1;
-        let queue_ptr = (vtable.add_parameter_data)(ptr, &param_id, &mut index);
+        let queue_ptr = ptr.addParameterData(&param_id, &mut index);
         assert!(!queue_ptr.is_null());
         assert_eq!(index, 0);
+        assert_eq!(ptr.getParameterCount(), 1);
 
-        let count = (vtable.get_parameter_count)(ptr);
-        assert_eq!(count, 1);
-
-        let retrieved_ptr = (vtable.get_parameter_data)(ptr, 0);
+        let retrieved_ptr = ptr.getParameterData(0);
         assert!(!retrieved_ptr.is_null());
     }
 }
 
 #[test]
 fn test_connection_point_new() {
-    let cp = ConnectionPoint::new();
-    assert!(!cp.as_ptr().is_null());
+    let _cp = ConnectionPoint::new();
 }
 
 #[test]
 fn test_bstream_ref_counting() {
     let stream = BStream::new();
-    let ptr = Box::into_raw(stream) as *mut c_void;
-
-    unsafe {
-        let vtable_ptr = *(ptr as *const *const IBStreamVtable);
-        let vtable = &*vtable_ptr;
-
-        let count = (vtable.add_ref)(ptr);
-        assert_eq!(count, 2);
-
-        let count = (vtable.add_ref)(ptr);
-        assert_eq!(count, 3);
-
-        let count = (vtable.release)(ptr);
-        assert_eq!(count, 2);
-
-        let count = (vtable.release)(ptr);
-        assert_eq!(count, 1);
-
-        let count = (vtable.release)(ptr);
-        assert_eq!(count, 0);
-    }
-}
-
-#[test]
-fn test_component_handler_ref_counting() {
-    let (handler, _rx, _prx, _urx) = ComponentHandler::new();
-    let ptr = Box::into_raw(handler) as *mut c_void;
-
-    unsafe {
-        let vtable_ptr = *(ptr as *const *const IComponentHandlerVtable);
-        let vtable = &*vtable_ptr;
-
-        let count = (vtable.add_ref)(ptr);
-        assert_eq!(count, 2);
-
-        let count = (vtable.release)(ptr);
-        assert_eq!(count, 1);
-
-        let count = (vtable.release)(ptr);
-        assert_eq!(count, 0);
-    }
+    let ptr = stream.to_com_ptr::<IBStream>().unwrap();
+    // `ptr` and `stream` each own a reference. ComPtr::clone addrefs;
+    // dropping each decrements. Nothing should crash.
+    let clone = ptr.clone();
+    drop(clone);
+    drop(ptr);
+    drop(stream);
 }
 
 #[test]
 fn test_component_handler_thread_safe() {
     let (handler, rx, _prx, _urx) = ComponentHandler::new();
-    let ptr = handler.as_ptr();
+    let ptr = handler.to_com_ptr::<IComponentHandler>().unwrap();
+    let ptr_addr = ptr.as_ptr() as usize;
 
     let handles: Vec<_> = (0..4)
         .map(|i| {
-            let ptr = ptr as usize;
-            std::thread::spawn(move || {
-                let ptr = ptr as *mut c_void;
-                unsafe {
-                    let vtable_ptr = *(ptr as *const *const IComponentHandlerVtable);
-                    let vtable = &*vtable_ptr;
-
-                    for j in 0..10 {
-                        (vtable.perform_edit)(ptr, i as u32, j as f64 * 0.1);
-                    }
+            std::thread::spawn(move || unsafe {
+                let r = vst3::ComRef::<IComponentHandler>::from_raw_unchecked(ptr_addr as *mut _);
+                for j in 0..10 {
+                    r.performEdit(i as u32, j as f64 * 0.1);
                 }
             })
         })
@@ -485,49 +379,45 @@ fn test_component_handler_thread_safe() {
     }
     assert_eq!(count, 40);
 
+    drop(ptr);
     drop(handler);
 }
 
 #[test]
 fn test_bstream_vtable_read_write() {
-    let mut stream = BStream::new();
-    let ptr = stream.as_ptr();
+    let stream = BStream::new();
+    let ptr = stream.to_com_ptr::<IBStream>().unwrap();
 
     unsafe {
-        let vtable_ptr = *(ptr as *const *const IBStreamVtable);
-        let vtable = &*vtable_ptr;
-
         let data = b"Hello, VST3!";
         let mut written: i32 = 0;
-        let result = (vtable.write)(
-            ptr,
-            data.as_ptr() as *const c_void,
+        let result = ptr.write(
+            data.as_ptr() as *mut c_void,
             data.len() as i32,
             &mut written,
         );
-        assert_eq!(result, K_RESULT_OK);
+        assert_eq!(result, kResultOk);
         assert_eq!(written, data.len() as i32);
 
         let mut new_pos: i64 = 0;
-        let result = (vtable.seek)(ptr, 0, 0, &mut new_pos);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.seek(0, 0, &mut new_pos);
+        assert_eq!(result, kResultOk);
         assert_eq!(new_pos, 0);
 
         let mut buffer = [0u8; 32];
         let mut bytes_read: i32 = 0;
-        let result = (vtable.read)(
-            ptr,
+        let result = ptr.read(
             buffer.as_mut_ptr() as *mut c_void,
             buffer.len() as i32,
             &mut bytes_read,
         );
-        assert_eq!(result, K_RESULT_OK);
+        assert_eq!(result, kResultOk);
         assert_eq!(bytes_read, data.len() as i32);
         assert_eq!(&buffer[..data.len()], data);
 
         let mut pos: i64 = 0;
-        let result = (vtable.tell)(ptr, &mut pos);
-        assert_eq!(result, K_RESULT_OK);
+        let result = ptr.tell(&mut pos);
+        assert_eq!(result, kResultOk);
         assert_eq!(pos, data.len() as i64);
     }
 }

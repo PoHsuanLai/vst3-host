@@ -2,7 +2,10 @@
 
 use std::ffi::c_void;
 
-use crate::ffi::{K_SAMPLE_32, K_SAMPLE_64};
+use vst3::Steinberg::Vst::SymbolicSampleSizes_;
+
+pub(crate) const K_SAMPLE_32_INT: i32 = SymbolicSampleSizes_::kSample32 as i32;
+pub(crate) const K_SAMPLE_64_INT: i32 = SymbolicSampleSizes_::kSample64 as i32;
 
 /// Marker trait for VST3-compatible sample types (f32, f64).
 ///
@@ -21,7 +24,7 @@ pub trait Sample: Copy + Default + Send + 'static {
 }
 
 impl Sample for f32 {
-    const VST3_SYMBOLIC_SIZE: i32 = K_SAMPLE_32;
+    const VST3_SYMBOLIC_SIZE: i32 = K_SAMPLE_32_INT;
 
     fn prepare_ffi_buffers(
         ptrs_f32: &mut BufferPtrs<f32>,
@@ -34,7 +37,7 @@ impl Sample for f32 {
 }
 
 impl Sample for f64 {
-    const VST3_SYMBOLIC_SIZE: i32 = K_SAMPLE_64;
+    const VST3_SYMBOLIC_SIZE: i32 = K_SAMPLE_64_INT;
 
     fn prepare_ffi_buffers(
         _ptrs_f32: &mut BufferPtrs<f32>,

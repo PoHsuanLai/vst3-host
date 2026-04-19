@@ -1,72 +1,67 @@
 //! VST3 plugin instance management.
 
-use std::ffi::c_void;
 use std::path::Path;
 use std::sync::Arc;
 
 use crossbeam_channel::Receiver;
 use smallvec::SmallVec;
+use vst3::com_scrape_types::Unknown;
+use vst3::{ComPtr, ComWrapper};
+use vst3::Steinberg::{
+    kResultFalse, kResultOk, FUnknown, IBStream, IPluginBaseTrait, IPlugView, IPlugViewTrait,
+    ViewRect,
+    Vst::{
+        BusDirections_::{kInput, kOutput},
+        IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentTrait, IConnectionPoint,
+        IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList,
+        IParameterChanges,
+        MediaTypes_::{kAudio, kEvent},
+        ProcessModes_::kRealtime,
+        ProcessSetup,
+    },
+};
+
+#[cfg(target_os = "macos")]
+use vst3::Steinberg::kPlatformTypeNSView;
+#[cfg(target_os = "windows")]
+use vst3::Steinberg::kPlatformTypeHWND;
+#[cfg(target_os = "linux")]
+use vst3::Steinberg::kPlatformTypeX11EmbedWindowID;
 
 use crate::com::{
     BStream, ComponentHandler, EventList, HostApplication, ParameterChangesImpl,
     ParameterEditEvent, ProgressEvent, UnitEvent,
 };
 use crate::error::{LoadStage, Result, Vst3Error};
-use crate::ffi::{
-    AudioBusBuffers, BusInfo, IAudioProcessorVtable, IComponentVtable, IConnectionPointVtable,
-    IEditControllerVtable, IPlugViewVtable, IUnknownVtable, ProcessData, ProcessSetup, ViewRect,
-    IID_IAUDIO_PROCESSOR, IID_ICOMPONENT, IID_ICONNECTION_POINT, IID_IEDIT_CONTROLLER, K_AUDIO,
-    K_EVENT, K_INPUT, K_OUTPUT, K_REALTIME, K_RESULT_OK, K_RESULT_TRUE, K_SAMPLE_32, K_SAMPLE_64,
-};
 use crate::types::{
-    AudioBuffer, BufferPtrs, EditorSize, MidiEvent, NoteExpressionValue, ParameterChanges,
-    PluginInfo, ProcessOutput, Sample, TransportState, WindowHandle,
+    AudioBuffer, BufferPtrs, BusInfo as BusInfoWrap, EditorSize, MidiEvent, NoteExpressionValue,
+    ParameterChanges, PluginInfo, ProcessOutput, Sample, TransportState, Vst3ParameterInfo,
+    WindowHandle,
 };
 
 use super::library::Vst3Library;
 
+// Re-express the handful of int-constant references we use in plugin API calls
+// as `i32` for `media_type`/`direction` arguments.
+const K_AUDIO: i32 = kAudio as i32;
+const K_EVENT: i32 = kEvent as i32;
+const K_INPUT: i32 = kInput as i32;
+const K_OUTPUT: i32 = kOutput as i32;
+const K_REALTIME: i32 = kRealtime as i32;
+
 pub(crate) struct PluginInterfaces {
-    pub component: *mut c_void,
-    pub component_vtable: *const IComponentVtable,
-    pub processor: Option<*mut c_void>,
-    pub processor_vtable: Option<*const IAudioProcessorVtable>,
-    pub controller: Option<*mut c_void>,
-    pub controller_vtable: Option<*const IEditControllerVtable>,
+    pub component: ComPtr<IComponent>,
+    pub processor: Option<ComPtr<IAudioProcessor>>,
+    pub controller: Option<ComPtr<IEditController>>,
     pub separate_controller: bool,
 }
 
 unsafe impl Send for PluginInterfaces {}
 unsafe impl Sync for PluginInterfaces {}
 
-impl PluginInterfaces {
-    /// Call `f` with the processor pointer and vtable if both are present.
-    fn with_processor<R>(
-        &self,
-        default: R,
-        f: impl FnOnce(*mut c_void, *const IAudioProcessorVtable) -> R,
-    ) -> R {
-        match (self.processor, self.processor_vtable) {
-            (Some(proc), Some(vtable)) => f(proc, vtable),
-            _ => default,
-        }
-    }
-
-    /// Call `f` with the controller pointer and vtable if both are present.
-    fn with_controller<R>(
-        &self,
-        default: R,
-        f: impl FnOnce(*mut c_void, *const IEditControllerVtable) -> R,
-    ) -> R {
-        match (self.controller, self.controller_vtable) {
-            (Some(ctrl), Some(vtable)) => f(ctrl, vtable),
-            _ => default,
-        }
-    }
-}
-
 pub(crate) struct HostContext {
-    pub application: Box<HostApplication>,
-    pub handler: Box<ComponentHandler>,
+    pub application: ComWrapper<HostApplication>,
+    pub handler: ComWrapper<ComponentHandler>,
     pub param_event_rx: Receiver<ParameterEditEvent>,
     pub progress_event_rx: Receiver<ProgressEvent>,
     pub unit_event_rx: Receiver<UnitEvent>,
@@ -80,89 +75,47 @@ pub(crate) struct AudioIO {
     pub num_output_channels: usize,
     pub ptrs_f32: BufferPtrs<f32>,
     pub ptrs_f64: BufferPtrs<f64>,
-    pub input_events: Option<Box<EventList>>,
-    pub output_events: Option<Box<EventList>>,
+    pub input_events: ComWrapper<EventList>,
+    pub output_events: ComWrapper<EventList>,
 }
 
 pub(crate) struct EditorState {
-    pub view: Option<*mut c_void>,
-    pub view_vtable: Option<*const IPlugViewVtable>,
+    pub view: Option<ComPtr<IPlugView>>,
     pub size: (u32, u32),
 }
 
 unsafe impl Send for EditorState {}
 unsafe impl Sync for EditorState {}
 
-/// Minimum pointer array size — ensures stereo even if plugin reports mono.
 const MIN_PTR_COUNT: usize = 2;
-
-/// Default editor dimensions when the plugin doesn't report a size.
 const DEFAULT_EDITOR_SIZE: (u32, u32) = (800, 600);
 
-/// Release a COM object through its IUnknown vtable.
-///
-/// # Safety
-///
-/// `obj` must be a valid COM object pointer.
-unsafe fn release_com(obj: *mut c_void) {
-    let vtable = *(obj as *const *const IUnknownVtable);
-    ((*vtable).release)(obj);
-}
-
-/// Query a COM interface from an object. Returns `None` if the interface is not supported.
-///
-/// # Safety
-///
-/// `object` must be a valid COM object pointer.
-unsafe fn query_interface(object: *mut c_void, iid: &[u8; 16]) -> Option<*mut c_void> {
-    let vtable = *(object as *const *const IUnknownVtable);
-    let mut out: *mut c_void = std::ptr::null_mut();
-    let result = ((*vtable).query_interface)(object, iid, &mut out);
-    if result == K_RESULT_OK && !out.is_null() {
-        Some(out)
-    } else {
-        None
-    }
-}
-
-fn cid_to_string(cid: &[u8; 16]) -> String {
+fn cid_to_string(cid_bytes: &[u8; 16]) -> String {
     format!(
         "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}",
-        cid[0], cid[1], cid[2], cid[3],
-        cid[4], cid[5], cid[6], cid[7],
-        cid[8], cid[9], cid[10], cid[11],
-        cid[12], cid[13], cid[14], cid[15]
+        cid_bytes[0], cid_bytes[1], cid_bytes[2], cid_bytes[3],
+        cid_bytes[4], cid_bytes[5], cid_bytes[6], cid_bytes[7],
+        cid_bytes[8], cid_bytes[9], cid_bytes[10], cid_bytes[11],
+        cid_bytes[12], cid_bytes[13], cid_bytes[14], cid_bytes[15]
     )
 }
 
-/// Query the channel count of the first audio bus in the given direction.
-/// Returns `None` if there are no buses of that direction.
-///
-/// # Safety
-///
-/// `component` and `vtable` must be valid pointers to an initialized IComponent.
-unsafe fn get_bus_channel_count(
-    component: *mut c_void,
-    vtable: *const IComponentVtable,
+fn get_bus_channel_count(
+    component: &ComPtr<IComponent>,
     direction: i32,
     min_channels: i32,
 ) -> Option<usize> {
-    let num_buses = ((*vtable).get_bus_count)(component, K_AUDIO, direction);
-    if num_buses <= 0 {
-        return None;
-    }
-    let mut bus_info = BusInfo::default();
-    let result = ((*vtable).get_bus_info)(
-        component,
-        K_AUDIO,
-        direction,
-        0,
-        &mut bus_info as *mut _ as *mut c_void,
-    );
-    if result == K_RESULT_OK {
-        Some(bus_info.channel_count.max(min_channels) as usize)
-    } else {
-        None
+    unsafe {
+        let num_buses = component.getBusCount(K_AUDIO, direction);
+        if num_buses <= 0 {
+            return None;
+        }
+        let mut bus = BusInfoWrap::default();
+        if component.getBusInfo(K_AUDIO, direction, 0, bus.as_mut_inner()) == kResultOk {
+            Some(bus.channel_count().max(min_channels) as usize)
+        } else {
+            None
+        }
     }
 }
 
@@ -201,11 +154,11 @@ impl Vst3Instance {
         let factory_info = library.get_factory_info();
         let vendor = factory_info.map(|info| info.vendor).unwrap_or_default();
 
-        let (class_cid, name) = (0..count)
+        let (class_cid, class_cid_bytes, name) = (0..count)
             .find_map(|i| {
                 let info = library.get_class_info(i).ok()?;
                 if info.category.contains("Audio") {
-                    Some((info.cid, info.name))
+                    Some((info.cid, info.cid_bytes, info.name))
                 } else {
                     None
                 }
@@ -216,32 +169,22 @@ impl Vst3Instance {
                 reason: "No audio processor classes found in VST3".to_string(),
             })?;
 
-        let component = library.create_instance(&class_cid, &IID_ICOMPONENT)?;
-        let component_vtable = unsafe { *(component as *const *const IComponentVtable) };
+        let component: ComPtr<IComponent> = library.create_instance(&class_cid)?;
 
-        // Query bus info (available before init on most plugins)
-        let (num_inputs, num_outputs) = unsafe {
-            let inputs = get_bus_channel_count(component, component_vtable, K_INPUT, 0).unwrap_or(0);
-            let outputs = get_bus_channel_count(component, component_vtable, K_OUTPUT, 1).unwrap_or(2);
-            (inputs, outputs)
-        };
+        let (num_inputs, num_outputs) = (
+            get_bus_channel_count(&component, K_INPUT, 0).unwrap_or(0),
+            get_bus_channel_count(&component, K_OUTPUT, 1).unwrap_or(2),
+        );
 
-        // Check for audio processor and f64 support
-        let supports_f64 = unsafe {
-            if let Some(processor) = query_interface(component, &IID_IAUDIO_PROCESSOR) {
-                let vtable = *(processor as *const *const IAudioProcessorVtable);
-                ((*vtable).can_process_sample_size)(processor, K_SAMPLE_64) == K_RESULT_OK
-            } else {
-                false
-            }
-        };
+        let supports_f64 = component
+            .cast::<IAudioProcessor>()
+            .map(|proc| unsafe {
+                proc.canProcessSampleSize(crate::types::K_SAMPLE_64_INT) == kResultOk
+            })
+            .unwrap_or(false);
 
-        let unique_id = cid_to_string(&class_cid);
-        // VST3 MIDI: check if there are event input buses
-        let receives_midi = unsafe {
-            let event_bus_count = ((*component_vtable).get_bus_count)(component, K_EVENT, K_INPUT);
-            event_bus_count > 0
-        };
+        let unique_id = cid_to_string(&class_cid_bytes);
+        let receives_midi = unsafe { component.getBusCount(K_EVENT, K_INPUT) > 0 };
 
         Ok(PluginInfo::new(format!("vst3.{}", unique_id), name)
             .vendor(vendor)
@@ -262,7 +205,6 @@ impl Vst3Instance {
 
         let library = Vst3Library::load(path)?;
         let count = library.count_classes();
-
         if count == 0 {
             return Err(Vst3Error::LoadFailed {
                 path: path.to_path_buf(),
@@ -274,11 +216,11 @@ impl Vst3Instance {
         let factory_info = library.get_factory_info();
         let vendor = factory_info.map(|info| info.vendor).unwrap_or_default();
 
-        let (class_info, name) = (0..count)
+        let (class_cid, class_cid_bytes, name) = (0..count)
             .find_map(|i| {
                 let info = library.get_class_info(i).ok()?;
                 if info.category.contains("Audio") {
-                    Some((info.cid, info.name))
+                    Some((info.cid, info.cid_bytes, info.name))
                 } else {
                     None
                 }
@@ -289,34 +231,26 @@ impl Vst3Instance {
                 reason: "No audio processor classes found in VST3".to_string(),
             })?;
 
-        let component = library.create_instance(&class_info, &IID_ICOMPONENT)?;
+        let component: ComPtr<IComponent> = library.create_instance(&class_cid)?;
 
-        let processor =
-            unsafe { query_interface(component, &IID_IAUDIO_PROCESSOR) }.ok_or_else(|| {
-                Vst3Error::LoadFailed {
-                    path: path.to_path_buf(),
-                    stage: LoadStage::Instantiation,
-                    reason: "VST3 plugin does not support IAudioProcessor".to_string(),
-                }
+        let processor = component
+            .cast::<IAudioProcessor>()
+            .ok_or_else(|| Vst3Error::LoadFailed {
+                path: path.to_path_buf(),
+                stage: LoadStage::Instantiation,
+                reason: "VST3 plugin does not support IAudioProcessor".to_string(),
             })?;
 
-        let component_vtable = unsafe { *(component as *const *const IComponentVtable) };
-
-        // Try single-component model first, fall back to separate controller
-        let (controller, separate_controller) = unsafe {
-            if let Some(ctrl) = query_interface(component, &IID_IEDIT_CONTROLLER) {
-                (Some(ctrl), false)
-            } else {
-                let mut controller_cid = [0u8; 16];
-                let result =
-                    ((*component_vtable).get_controller_class_id)(component, &mut controller_cid);
-                if result == K_RESULT_OK && controller_cid != [0u8; 16] {
-                    if let Ok(ctrl) =
-                        library.create_instance(&controller_cid, &IID_IEDIT_CONTROLLER)
-                    {
-                        (Some(ctrl), true)
-                    } else {
-                        (None, false)
+        // Try single-component model first, fall back to separate controller.
+        let (controller, separate_controller) = match component.cast::<IEditController>() {
+            Some(ctrl) => (Some(ctrl), false),
+            None => {
+                let mut controller_cid = [0i8; 16];
+                let result = unsafe { component.getControllerClassId(&mut controller_cid) };
+                if result == kResultOk && controller_cid != [0i8; 16] {
+                    match library.create_instance::<IEditController>(&controller_cid) {
+                        Ok(ctrl) => (Some(ctrl), true),
+                        Err(_) => (None, false),
                     }
                 } else {
                     (None, false)
@@ -324,24 +258,14 @@ impl Vst3Instance {
             }
         };
 
-        let processor_vtable = unsafe { *(processor as *const *const IAudioProcessorVtable) };
-        let controller_vtable =
-            controller.map(|c| unsafe { *(c as *const *const IEditControllerVtable) });
-
-        let unique_id = cid_to_string(&class_info);
-
         let supports_f64 = unsafe {
-            ((*processor_vtable).can_process_sample_size)(processor, K_SAMPLE_64) == K_RESULT_OK
+            processor.canProcessSampleSize(crate::types::K_SAMPLE_64_INT) == kResultOk
         };
 
-        let (num_input_channels, num_output_channels) = unsafe {
-            let input_channels =
-                get_bus_channel_count(component, component_vtable, K_INPUT, 0).unwrap_or(0);
-            let output_channels =
-                get_bus_channel_count(component, component_vtable, K_OUTPUT, 1).unwrap_or(2);
-            (input_channels, output_channels)
-        };
+        let num_input_channels = get_bus_channel_count(&component, K_INPUT, 0).unwrap_or(0);
+        let num_output_channels = get_bus_channel_count(&component, K_OUTPUT, 1).unwrap_or(2);
 
+        let unique_id = cid_to_string(&class_cid_bytes);
         let info = PluginInfo::new(format!("vst3.{}", unique_id), name.clone())
             .vendor(vendor)
             .version("1.0.0".to_string())
@@ -353,7 +277,6 @@ impl Vst3Instance {
         let (component_handler, param_event_rx, progress_event_rx, unit_event_rx) =
             ComponentHandler::new();
 
-        // At least 2 channels to handle common stereo cases
         let input_ptr_count = num_input_channels.max(MIN_PTR_COUNT);
         let output_ptr_count = num_output_channels.max(MIN_PTR_COUNT);
 
@@ -361,11 +284,8 @@ impl Vst3Instance {
             _library: library,
             interfaces: PluginInterfaces {
                 component,
-                component_vtable,
                 processor: Some(processor),
-                processor_vtable: Some(processor_vtable),
                 controller,
-                controller_vtable,
                 separate_controller,
             },
             host: HostContext {
@@ -383,12 +303,11 @@ impl Vst3Instance {
                 num_output_channels,
                 ptrs_f32: BufferPtrs::new(input_ptr_count, output_ptr_count),
                 ptrs_f64: BufferPtrs::new(input_ptr_count, output_ptr_count),
-                input_events: Some(EventList::new()),
-                output_events: Some(EventList::new()),
+                input_events: EventList::new(),
+                output_events: EventList::new(),
             },
             editor: EditorState {
                 view: None,
-                view_vtable: None,
                 size: DEFAULT_EDITOR_SIZE,
             },
             info,
@@ -401,14 +320,7 @@ impl Vst3Instance {
     }
 
     /// Load a VST3 plugin for GUI/editor use only (no audio processing).
-    ///
-    /// Performs full initialization (including IAudioProcessor setup, bus
-    /// activation, and setActive) but skips setProcessing. Many plugins
-    /// require the component to be active before their editor works.
     pub fn load_gui_only(path: &Path) -> Result<Self> {
-        // Keep full initialization including setProcessing(true) — some plugins
-        // (e.g. TAL-NoiseMaker) require the audio processor to be active for
-        // their editor to work. We never actually process audio on this instance.
         Self::load(path, 44100.0, 512)
     }
 
@@ -416,20 +328,11 @@ impl Vst3Instance {
         &self.info
     }
 
-    /// Returns the plugin's reported processing latency in samples.
-    /// Returns 0 if the processor interface is unavailable.
-    ///
-    /// TODO(plugin-latency-runtime): VST3 plugins signal latency changes via
-    /// `IComponentHandler::restartComponent(kLatencyChanged)`. We don't
-    /// implement `IHostApplication::restartComponent` yet, so runtime latency
-    /// updates are invisible — only the initial value queried here is seen.
-    /// To support runtime updates: implement a restart handler on the host
-    /// context that flips an atomic flag, poll it in the plugin-server loop
-    /// (next to `poll_latency_changes`), and send `BridgeMessage::LatencyChanged`.
     pub fn get_latency_samples(&self) -> u32 {
-        self.interfaces.with_processor(0, |proc, vt| unsafe {
-            ((*vt).get_latency_samples)(proc)
-        })
+        match &self.interfaces.processor {
+            Some(p) => unsafe { p.getLatencySamples() },
+            None => 0,
+        }
     }
 
     pub fn supports_f64(&self) -> bool {
@@ -476,20 +379,21 @@ impl Vst3Instance {
 
     fn apply_process_setup(&mut self) {
         let symbolic_sample_size = if self.audio.use_f64 {
-            K_SAMPLE_64
+            crate::types::K_SAMPLE_64_INT
         } else {
-            K_SAMPLE_32
+            crate::types::K_SAMPLE_32_INT
         };
-        let setup = ProcessSetup {
-            process_mode: K_REALTIME,
-            symbolic_sample_size,
-            max_samples_per_block: self.audio.block_size as i32,
-            sample_rate: self.audio.sample_rate,
+        let mut setup = ProcessSetup {
+            processMode: K_REALTIME,
+            symbolicSampleSize: symbolic_sample_size,
+            maxSamplesPerBlock: self.audio.block_size as i32,
+            sampleRate: self.audio.sample_rate,
         };
-
-        self.interfaces.with_processor((), |proc, vt| unsafe {
-            ((*vt).setup_processing)(proc, &setup);
-        });
+        if let Some(ref p) = self.interfaces.processor {
+            unsafe {
+                p.setupProcessing(&mut setup);
+            }
+        }
     }
 
     pub fn process<T: Sample>(
@@ -505,11 +409,14 @@ impl Vst3Instance {
             parameter_changes: ParameterChanges::new(),
         };
 
-        if !self.is_active {
-            return empty_result;
-        }
+        let processor = match &self.interfaces.processor {
+            Some(p) => p.clone(),
+            None => return empty_result,
+        };
 
-        if T::VST3_SYMBOLIC_SIZE == K_SAMPLE_64 && !self.info.supports_f64 {
+        if !self.is_active
+            || (T::VST3_SYMBOLIC_SIZE == crate::types::K_SAMPLE_64_INT && !self.info.supports_f64)
+        {
             return empty_result;
         }
 
@@ -525,87 +432,84 @@ impl Vst3Instance {
             buffer.outputs,
         );
 
-        let mut input_bus = AudioBusBuffers {
-            num_channels: buffer.inputs.len() as i32,
-            silence_flags: 0,
-            buffers: input_ptrs,
-        };
+        let mut input_bus: vst3::Steinberg::Vst::AudioBusBuffers = unsafe { std::mem::zeroed() };
+        input_bus.numChannels = buffer.inputs.len() as i32;
+        input_bus.silenceFlags = 0;
+        input_bus.__field0.channelBuffers32 = input_ptrs as *mut *mut f32;
 
-        let mut output_bus = AudioBusBuffers {
-            num_channels: buffer.outputs.len() as i32,
-            silence_flags: 0,
-            buffers: output_ptrs,
-        };
+        let mut output_bus: vst3::Steinberg::Vst::AudioBusBuffers = unsafe { std::mem::zeroed() };
+        output_bus.numChannels = buffer.outputs.len() as i32;
+        output_bus.silenceFlags = 0;
+        output_bus.__field0.channelBuffers32 = output_ptrs as *mut *mut f32;
 
-        let mut input_event_list = self.audio.input_events.take().unwrap();
         let has_events = !midi_events.is_empty() || !note_expressions.is_empty();
         if has_events {
-            input_event_list.update_from_midi_and_expression(midi_events, note_expressions);
+            self.audio
+                .input_events
+                .update_from_midi_and_expression(midi_events, note_expressions);
         } else {
-            input_event_list.clear();
+            self.audio.input_events.clear();
         }
+        self.audio.output_events.clear();
 
-        let input_events = if has_events {
-            input_event_list.as_ptr()
+        let input_events_ptr: *mut IEventList = if has_events {
+            self.audio
+                .input_events
+                .as_com_ref::<IEventList>()
+                .map(|r| r.as_ptr())
+                .unwrap_or(std::ptr::null_mut())
         } else {
             std::ptr::null_mut()
         };
 
-        let mut output_event_list = self.audio.output_events.take().unwrap();
-        output_event_list.clear();
-
-        let mut input_param_changes_box: Option<Box<ParameterChangesImpl>> = param_changes
-            .and_then(|pc| {
-                if !pc.is_empty() {
-                    Some(ParameterChangesImpl::from_changes(pc))
-                } else {
-                    None
-                }
-            });
-
-        let input_param_changes_ptr = input_param_changes_box
-            .as_mut()
-            .map(|c| c.as_ptr())
+        let output_events_ptr: *mut IEventList = self
+            .audio
+            .output_events
+            .as_com_ref::<IEventList>()
+            .map(|r| r.as_ptr())
             .unwrap_or(std::ptr::null_mut());
 
-        let mut output_param_changes = ParameterChangesImpl::new_empty();
+        let input_param_changes = param_changes
+            .filter(|pc| !pc.is_empty())
+            .map(ParameterChangesImpl::from_changes);
+        let input_param_changes_ptr = input_param_changes
+            .as_ref()
+            .and_then(|c| c.as_com_ref::<IParameterChanges>().map(|r| r.as_ptr()))
+            .unwrap_or(std::ptr::null_mut());
+
+        let output_param_changes = ParameterChangesImpl::new_empty();
+        let output_param_changes_ptr = output_param_changes
+            .as_com_ref::<IParameterChanges>()
+            .map(|r| r.as_ptr())
+            .unwrap_or(std::ptr::null_mut());
 
         let mut process_context = transport.to_process_context();
-        process_context.sample_rate = buffer.sample_rate;
+        process_context.sampleRate = buffer.sample_rate;
 
-        let mut process_data = ProcessData {
-            process_mode: K_REALTIME,
-            symbolic_sample_size: T::VST3_SYMBOLIC_SIZE,
-            num_samples: num_samples as i32,
-            num_inputs: 1,
-            num_outputs: 1,
-            inputs: &mut input_bus,
-            outputs: &mut output_bus,
-            input_param_changes: input_param_changes_ptr,
-            output_param_changes: output_param_changes.as_ptr(),
-            input_events,
-            output_events: output_event_list.as_ptr(),
-            context: &mut process_context,
-        };
+        let mut process_data: vst3::Steinberg::Vst::ProcessData =
+            unsafe { std::mem::zeroed() };
+        process_data.processMode = K_REALTIME;
+        process_data.symbolicSampleSize = T::VST3_SYMBOLIC_SIZE;
+        process_data.numSamples = num_samples as i32;
+        process_data.numInputs = 1;
+        process_data.numOutputs = 1;
+        process_data.inputs = &mut input_bus;
+        process_data.outputs = &mut output_bus;
+        process_data.inputParameterChanges = input_param_changes_ptr;
+        process_data.outputParameterChanges = output_param_changes_ptr;
+        process_data.inputEvents = input_events_ptr;
+        process_data.outputEvents = output_events_ptr;
+        process_data.processContext = &mut process_context;
 
-        let result = self
-            .interfaces
-            .with_processor(K_RESULT_OK, |proc, vt| unsafe {
-                ((*vt).process)(proc, &mut process_data)
-            });
+        let result = unsafe { processor.process(&mut process_data) };
 
-        if result != K_RESULT_OK {
+        if result != kResultOk {
             buffer.clear_outputs();
-            self.audio.input_events = Some(input_event_list);
-            self.audio.output_events = Some(output_event_list);
             return empty_result;
         }
 
-        let midi_out = output_event_list.to_midi_events();
+        let midi_out = self.audio.output_events.to_midi_events();
         let param_out = output_param_changes.to_changes();
-
-        self.audio.input_events = Some(input_event_list);
-        self.audio.output_events = Some(output_event_list);
 
         ProcessOutput {
             midi_events: midi_out,
@@ -614,36 +518,33 @@ impl Vst3Instance {
     }
 
     pub fn parameter_count(&self) -> u32 {
-        self.interfaces
-            .with_controller(0, |ctrl, vt| unsafe { ((*vt).get_parameter_count)(ctrl) })
-            as u32
+        match &self.interfaces.controller {
+            Some(c) => unsafe { c.getParameterCount() as u32 },
+            None => 0,
+        }
     }
 
     pub fn parameter(&self, index: u32) -> f64 {
-        self.interfaces.with_controller(0.0, |ctrl, vt| unsafe {
-            ((*vt).get_param_normalized)(ctrl, index)
-        })
+        match &self.interfaces.controller {
+            Some(c) => unsafe { c.getParamNormalized(index) },
+            None => 0.0,
+        }
     }
 
     pub fn set_parameter(&mut self, index: u32, value: f64) -> &mut Self {
-        self.interfaces.with_controller((), |ctrl, vt| unsafe {
-            ((*vt).set_param_normalized)(ctrl, index, value);
-        });
+        if let Some(c) = &self.interfaces.controller {
+            unsafe {
+                c.setParamNormalized(index, value);
+            }
+        }
         self
     }
 
-    pub fn parameter_info(&self, index: u32) -> Option<crate::ffi::Vst3ParameterInfo> {
-        self.interfaces.with_controller(None, |ctrl, vt| {
-            let mut info = crate::ffi::Vst3ParameterInfo::default();
-            let result = unsafe {
-                ((*vt).get_parameter_info)(ctrl, index as i32, &mut info as *mut _ as *mut c_void)
-            };
-            if result == K_RESULT_OK {
-                Some(info)
-            } else {
-                None
-            }
-        })
+    pub fn parameter_info(&self, index: u32) -> Option<Vst3ParameterInfo> {
+        let controller = self.interfaces.controller.as_ref()?;
+        let mut raw: vst3::Steinberg::Vst::ParameterInfo = unsafe { std::mem::zeroed() };
+        let result = unsafe { controller.getParameterInfo(index as i32, &mut raw) };
+        (result == kResultOk).then(|| Vst3ParameterInfo::from_c(&raw))
     }
 
     pub fn param_event_receiver(&self) -> &Receiver<ParameterEditEvent> {
@@ -651,11 +552,7 @@ impl Vst3Instance {
     }
 
     pub fn poll_param_events(&self) -> Vec<ParameterEditEvent> {
-        let mut events = Vec::new();
-        while let Ok(event) = self.host.param_event_rx.try_recv() {
-            events.push(event);
-        }
-        events
+        self.host.param_event_rx.try_iter().collect()
     }
 
     pub fn progress_event_receiver(&self) -> &Receiver<ProgressEvent> {
@@ -663,11 +560,7 @@ impl Vst3Instance {
     }
 
     pub fn poll_progress_events(&self) -> Vec<ProgressEvent> {
-        let mut events = Vec::new();
-        while let Ok(event) = self.host.progress_event_rx.try_recv() {
-            events.push(event);
-        }
-        events
+        self.host.progress_event_rx.try_iter().collect()
     }
 
     pub fn unit_event_receiver(&self) -> &Receiver<UnitEvent> {
@@ -675,24 +568,18 @@ impl Vst3Instance {
     }
 
     pub fn poll_unit_events(&self) -> Vec<UnitEvent> {
-        let mut events = Vec::new();
-        while let Ok(event) = self.host.unit_event_rx.try_recv() {
-            events.push(event);
-        }
-        events
+        self.host.unit_event_rx.try_iter().collect()
     }
 
     pub fn state(&self) -> Result<Vec<u8>> {
-        let mut stream = BStream::new();
+        let stream = BStream::new();
+        let stream_ptr = stream
+            .as_com_ref::<IBStream>()
+            .ok_or_else(|| Vst3Error::StateError("Failed to wrap BStream".into()))?;
 
-        let result = unsafe {
-            ((*self.interfaces.component_vtable).get_state)(
-                self.interfaces.component,
-                stream.as_ptr(),
-            )
-        };
+        let result = unsafe { self.interfaces.component.getState(stream_ptr.as_ptr()) };
 
-        if result != K_RESULT_OK && result != K_RESULT_TRUE {
+        if result != kResultOk && result != kResultFalse {
             return self.state_fallback();
         }
 
@@ -707,7 +594,6 @@ impl Vst3Instance {
             let value = self.parameter(i);
             state.extend_from_slice(&value.to_le_bytes());
         }
-
         Ok(state)
     }
 
@@ -716,23 +602,25 @@ impl Vst3Instance {
             return Err(Vst3Error::StateError("Empty state data".to_string()));
         }
 
-        let mut stream = BStream::from_data(data.to_vec());
+        let stream = BStream::from_data(data.to_vec());
+        let stream_ptr = stream
+            .as_com_ref::<IBStream>()
+            .ok_or_else(|| Vst3Error::StateError("Failed to wrap BStream".into()))?;
 
-        let result = unsafe {
-            ((*self.interfaces.component_vtable).set_state)(
-                self.interfaces.component,
-                stream.as_ptr(),
-            )
-        };
+        let result = unsafe { self.interfaces.component.setState(stream_ptr.as_ptr()) };
 
-        if result != K_RESULT_OK && result != K_RESULT_TRUE {
+        if result != kResultOk && result != kResultFalse {
             return self.set_state_fallback(data);
         }
 
-        self.interfaces.with_controller((), |ctrl, vt| {
-            let mut stream = BStream::from_data(data.to_vec());
-            let _ = unsafe { ((*vt).set_component_state)(ctrl, stream.as_ptr()) };
-        });
+        if let Some(ctrl) = &self.interfaces.controller {
+            let ctrl_stream = BStream::from_data(data.to_vec());
+            if let Some(ctrl_stream_ref) = ctrl_stream.as_com_ref::<IBStream>() {
+                unsafe {
+                    let _ = ctrl.setComponentState(ctrl_stream_ref.as_ptr());
+                }
+            }
+        }
 
         Ok(self)
     }
@@ -750,7 +638,6 @@ impl Vst3Instance {
             )));
         }
         let expected_size = 4usize.saturating_add((param_count as usize).saturating_mul(8));
-
         if data.len() != expected_size {
             return Err(Vst3Error::StateError(format!(
                 "State size mismatch: expected {}, got {}",
@@ -782,235 +669,205 @@ impl Vst3Instance {
     }
 
     pub fn open_editor(&mut self, parent: WindowHandle) -> Result<EditorSize> {
-        let ctrl = self.interfaces.controller.ok_or(Vst3Error::NotSupported(
-            "Plugin has no editor controller".to_string(),
-        ))?;
-
-        let ctrl_vtable = self
+        let ctrl = self
             .interfaces
-            .controller_vtable
+            .controller
+            .as_ref()
             .ok_or(Vst3Error::NotSupported(
-                "Controller vtable missing".to_string(),
+                "Plugin has no editor controller".to_string(),
             ))?;
 
-        unsafe {
-            let view_type = c"editor".as_ptr();
-            let view_ptr = ((*ctrl_vtable).create_view)(ctrl, view_type);
+        let view_raw = unsafe { ctrl.createView(c"editor".as_ptr()) };
+        let view = unsafe { ComPtr::from_raw(view_raw) }.ok_or(Vst3Error::NotSupported(
+            "Failed to create plugin view".to_string(),
+        ))?;
 
-            if view_ptr.is_null() {
-                return Err(Vst3Error::NotSupported(
-                    "Failed to create plugin view".to_string(),
-                ));
-            }
+        #[cfg(target_os = "macos")]
+        let platform_type = kPlatformTypeNSView;
+        #[cfg(target_os = "windows")]
+        let platform_type = kPlatformTypeHWND;
+        #[cfg(target_os = "linux")]
+        let platform_type = kPlatformTypeX11EmbedWindowID;
 
-            let view_vtable = *(view_ptr as *const *const IPlugViewVtable);
-
-            #[cfg(target_os = "macos")]
-            let platform_type = c"NSView".as_ptr();
-            #[cfg(target_os = "windows")]
-            let platform_type = c"HWND".as_ptr();
-            #[cfg(target_os = "linux")]
-            let platform_type = c"X11EmbedWindowID".as_ptr();
-
-            let result = ((*view_vtable).attached)(view_ptr, parent.as_ptr(), platform_type);
-
-            if result != K_RESULT_OK {
-                return Err(Vst3Error::PluginError {
-                    stage: LoadStage::Initialization,
-                    code: result,
-                });
-            }
-
-            let mut rect = ViewRect::default();
-            let result = ((*view_vtable).get_size)(view_ptr, &mut rect);
-
-            let (width, height) = if result == K_RESULT_OK {
-                (rect.width() as u32, rect.height() as u32)
-            } else {
-                self.editor.size
-            };
-
-            self.editor.view = Some(view_ptr);
-            self.editor.view_vtable = Some(view_vtable);
-            self.editor.size = (width, height);
-
-            Ok(EditorSize { width, height })
-        }
-    }
-
-    /// Stop audio processing without deactivating.
-    /// Safe to call multiple times. Drop handles full deactivation.
-    pub fn stop_processing(&mut self) {
-        if self.is_active {
-            self.interfaces.with_processor((), |proc, vt| unsafe {
-                ((*vt).set_processing)(proc, 0);
-            });
-        }
-    }
-
-    pub fn close_editor(&mut self) -> &mut Self {
-        if let (Some(view), Some(vtable)) = (self.editor.view, self.editor.view_vtable) {
-            unsafe {
-                ((*vtable).removed)(view);
-                release_com(view);
-            }
-
-            self.editor.view = None;
-            self.editor.view_vtable = None;
-        }
-        self
-    }
-
-    fn connect_component_and_controller(&self) {
-        let ctrl = match self.interfaces.controller {
-            Some(c) => c,
-            None => return,
-        };
-
-        let comp_conn =
-            unsafe { query_interface(self.interfaces.component, &IID_ICONNECTION_POINT) };
-        let comp_conn = match comp_conn {
-            Some(ptr) => ptr,
-            None => return,
-        };
-
-        let ctrl_conn = unsafe { query_interface(ctrl, &IID_ICONNECTION_POINT) };
-        let ctrl_conn = match ctrl_conn {
-            Some(ptr) => ptr,
-            None => {
-                unsafe { release_com(comp_conn) };
-                return;
-            }
-        };
-
-        let comp_conn_vtable = unsafe { *(comp_conn as *const *const IConnectionPointVtable) };
-        let ctrl_conn_vtable = unsafe { *(ctrl_conn as *const *const IConnectionPointVtable) };
-
-        unsafe { ((*comp_conn_vtable).connect)(comp_conn, ctrl_conn) };
-        unsafe { ((*ctrl_conn_vtable).connect)(ctrl_conn, comp_conn) };
-
-        // Connection points hold internal refs after connect
-        unsafe {
-            release_com(comp_conn);
-            release_com(ctrl_conn);
-        }
-    }
-
-    fn initialize(&mut self) -> Result<()> {
-        let host_ptr = self.host.application.as_ptr();
-        let result = unsafe {
-            ((*self.interfaces.component_vtable).initialize)(self.interfaces.component, host_ptr)
-        };
-
-        if result != K_RESULT_OK && result != K_RESULT_TRUE {
+        let result = unsafe { view.attached(parent.as_ptr(), platform_type) };
+        if result != kResultOk {
             return Err(Vst3Error::PluginError {
                 stage: LoadStage::Initialization,
                 code: result,
             });
         }
 
-        // Re-query bus info after IComponent::initialize() — some plugins (e.g. Voxengo
-        // Boogex) don't report their input buses until after initialization.
-        unsafe {
-            if let Some(ch) = get_bus_channel_count(
-                self.interfaces.component,
-                self.interfaces.component_vtable,
-                K_INPUT,
-                0,
-            ) {
-                if ch != self.audio.num_input_channels {
-                    self.audio.num_input_channels = ch;
-                    self.info = self
-                        .info
-                        .clone()
-                        .audio_io(ch, self.audio.num_output_channels);
-                    self.audio.ptrs_f32.resize_inputs(ch.max(MIN_PTR_COUNT));
-                    self.audio.ptrs_f64.resize_inputs(ch.max(MIN_PTR_COUNT));
+        let mut rect = ViewRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let size_result = unsafe { view.getSize(&mut rect) };
+
+        let (width, height) = if size_result == kResultOk {
+            (
+                (rect.right - rect.left) as u32,
+                (rect.bottom - rect.top) as u32,
+            )
+        } else {
+            self.editor.size
+        };
+
+        self.editor.view = Some(view);
+        self.editor.size = (width, height);
+
+        Ok(EditorSize { width, height })
+    }
+
+    pub fn stop_processing(&mut self) {
+        if self.is_active {
+            if let Some(p) = &self.interfaces.processor {
+                unsafe {
+                    p.setProcessing(0);
                 }
             }
+        }
+    }
 
-            if let Some(ch) = get_bus_channel_count(
-                self.interfaces.component,
-                self.interfaces.component_vtable,
-                K_OUTPUT,
-                1,
-            ) {
-                if ch != self.audio.num_output_channels {
-                    self.audio.num_output_channels = ch;
-                    self.info = self
-                        .info
-                        .clone()
-                        .audio_io(self.audio.num_input_channels, ch);
-                    self.audio.ptrs_f32.resize_outputs(ch.max(MIN_PTR_COUNT));
-                    self.audio.ptrs_f64.resize_outputs(ch.max(MIN_PTR_COUNT));
-                }
+    pub fn close_editor(&mut self) -> &mut Self {
+        if let Some(view) = self.editor.view.take() {
+            unsafe {
+                view.removed();
+            }
+        }
+        self
+    }
+
+    fn connect_component_and_controller(&self) {
+        let ctrl = match &self.interfaces.controller {
+            Some(c) => c,
+            None => return,
+        };
+
+        let comp_conn = match self.interfaces.component.cast::<IConnectionPoint>() {
+            Some(p) => p,
+            None => return,
+        };
+        let ctrl_conn = match ctrl.cast::<IConnectionPoint>() {
+            Some(p) => p,
+            None => return,
+        };
+
+        unsafe {
+            comp_conn.connect(ctrl_conn.as_ptr());
+            ctrl_conn.connect(comp_conn.as_ptr());
+        }
+    }
+
+    fn initialize(&mut self) -> Result<()> {
+        let host_ptr: *mut FUnknown = self
+            .host
+            .application
+            .to_com_ptr::<vst3::Steinberg::Vst::IHostApplication>()
+            .ok_or(Vst3Error::PluginError {
+                stage: LoadStage::Initialization,
+                code: 0,
+            })?
+            .upcast::<FUnknown>()
+            .into_raw();
+
+        let result = unsafe { self.interfaces.component.initialize(host_ptr) };
+        if result != kResultOk && result != kResultFalse {
+            unsafe {
+                FUnknown::release(host_ptr);
+            }
+            return Err(Vst3Error::PluginError {
+                stage: LoadStage::Initialization,
+                code: result,
+            });
+        }
+
+        if let Some(ch) = get_bus_channel_count(&self.interfaces.component, K_INPUT, 0) {
+            if ch != self.audio.num_input_channels {
+                self.audio.num_input_channels = ch;
+                self.info = self
+                    .info
+                    .clone()
+                    .audio_io(ch, self.audio.num_output_channels);
+                self.audio.ptrs_f32.resize_inputs(ch.max(MIN_PTR_COUNT));
+                self.audio.ptrs_f64.resize_inputs(ch.max(MIN_PTR_COUNT));
+            }
+        }
+        if let Some(ch) = get_bus_channel_count(&self.interfaces.component, K_OUTPUT, 1) {
+            if ch != self.audio.num_output_channels {
+                self.audio.num_output_channels = ch;
+                self.info = self
+                    .info
+                    .clone()
+                    .audio_io(self.audio.num_input_channels, ch);
+                self.audio.ptrs_f32.resize_outputs(ch.max(MIN_PTR_COUNT));
+                self.audio.ptrs_f64.resize_outputs(ch.max(MIN_PTR_COUNT));
             }
         }
 
         let separate = self.interfaces.separate_controller;
-        let handler_ptr = self.host.handler.as_ptr();
-        self.interfaces.with_controller((), |ctrl, vt| {
-            if separate {
-                let _ = unsafe { ((*vt).initialize)(ctrl, host_ptr) };
-            }
-        });
-
         if separate {
+            if let Some(ctrl) = &self.interfaces.controller {
+                unsafe {
+                    let _ = ctrl.initialize(host_ptr);
+                }
+            }
             self.connect_component_and_controller();
         }
 
-        self.interfaces.with_controller((), |ctrl, vt| {
-            let _ = unsafe { ((*vt).set_component_handler)(ctrl, handler_ptr) };
-        });
+        if let Some(ctrl) = &self.interfaces.controller {
+            let handler_ptr: *mut vst3::Steinberg::Vst::IComponentHandler = self
+                .host
+                .handler
+                .as_com_ref::<vst3::Steinberg::Vst::IComponentHandler>()
+                .map(|r| r.as_ptr())
+                .unwrap_or(std::ptr::null_mut());
+            unsafe {
+                let _ = ctrl.setComponentHandler(handler_ptr);
+            }
+        }
 
         let symbolic_sample_size = if self.audio.use_f64 {
-            K_SAMPLE_64
+            crate::types::K_SAMPLE_64_INT
         } else {
-            K_SAMPLE_32
+            crate::types::K_SAMPLE_32_INT
         };
-        let setup = ProcessSetup {
-            process_mode: K_REALTIME,
-            symbolic_sample_size,
-            max_samples_per_block: self.audio.block_size as i32,
-            sample_rate: self.audio.sample_rate,
+        let mut setup = ProcessSetup {
+            processMode: K_REALTIME,
+            symbolicSampleSize: symbolic_sample_size,
+            maxSamplesPerBlock: self.audio.block_size as i32,
+            sampleRate: self.audio.sample_rate,
         };
 
-        let result = self
-            .interfaces
-            .with_processor(K_RESULT_OK, |proc, vt| unsafe {
-                ((*vt).setup_processing)(proc, &setup)
-            });
-
-        if result != K_RESULT_OK && result != K_RESULT_TRUE {
-            return Err(Vst3Error::PluginError {
-                stage: LoadStage::Setup,
-                code: result,
-            });
+        if let Some(p) = &self.interfaces.processor {
+            let result = unsafe { p.setupProcessing(&mut setup) };
+            if result != kResultOk && result != kResultFalse {
+                return Err(Vst3Error::PluginError {
+                    stage: LoadStage::Setup,
+                    code: result,
+                });
+            }
         }
 
         self.activate_buses()?;
 
-        // VST3 spec requires: setActive(true) before setProcessing(true)
-        let result = unsafe {
-            ((*self.interfaces.component_vtable).set_active)(self.interfaces.component, 1)
-        };
-        if result != K_RESULT_OK && result != K_RESULT_TRUE {
+        let result = unsafe { self.interfaces.component.setActive(1) };
+        if result != kResultOk && result != kResultFalse {
             return Err(Vst3Error::PluginError {
                 stage: LoadStage::Activation,
                 code: result,
             });
         }
 
-        let result = self
-            .interfaces
-            .with_processor(K_RESULT_OK, |proc, vt| unsafe {
-                ((*vt).set_processing)(proc, 1)
-            });
-        if result != K_RESULT_OK && result != K_RESULT_TRUE {
-            return Err(Vst3Error::PluginError {
-                stage: LoadStage::Activation,
-                code: result,
-            });
+        if let Some(p) = &self.interfaces.processor {
+            let result = unsafe { p.setProcessing(1) };
+            if result != kResultOk && result != kResultFalse {
+                return Err(Vst3Error::PluginError {
+                    stage: LoadStage::Activation,
+                    code: result,
+                });
+            }
         }
 
         self.is_active = true;
@@ -1018,46 +875,20 @@ impl Vst3Instance {
     }
 
     fn activate_buses(&mut self) -> Result<()> {
-        let num_input_buses = unsafe {
-            ((*self.interfaces.component_vtable).get_bus_count)(
-                self.interfaces.component,
-                K_AUDIO,
-                K_INPUT,
-            )
-        };
-
-        for i in 0..num_input_buses {
-            unsafe {
-                ((*self.interfaces.component_vtable).activate_bus)(
-                    self.interfaces.component,
-                    K_AUDIO,
-                    K_INPUT,
-                    i,
-                    1,
-                );
+        unsafe {
+            let num_input_buses = self.interfaces.component.getBusCount(K_AUDIO, K_INPUT);
+            for i in 0..num_input_buses {
+                self.interfaces
+                    .component
+                    .activateBus(K_AUDIO, K_INPUT, i, 1);
+            }
+            let num_output_buses = self.interfaces.component.getBusCount(K_AUDIO, K_OUTPUT);
+            for i in 0..num_output_buses {
+                self.interfaces
+                    .component
+                    .activateBus(K_AUDIO, K_OUTPUT, i, 1);
             }
         }
-
-        let num_output_buses = unsafe {
-            ((*self.interfaces.component_vtable).get_bus_count)(
-                self.interfaces.component,
-                K_AUDIO,
-                K_OUTPUT,
-            )
-        };
-
-        for i in 0..num_output_buses {
-            unsafe {
-                ((*self.interfaces.component_vtable).activate_bus)(
-                    self.interfaces.component,
-                    K_AUDIO,
-                    K_OUTPUT,
-                    i,
-                    1,
-                );
-            }
-        }
-
         Ok(())
     }
 }
@@ -1067,30 +898,21 @@ impl Drop for Vst3Instance {
         self.close_editor();
 
         if self.is_active {
-            self.interfaces.with_processor((), |proc, vt| unsafe {
-                ((*vt).set_processing)(proc, 0);
-            });
+            if let Some(p) = &self.interfaces.processor {
+                unsafe {
+                    p.setProcessing(0);
+                }
+            }
             unsafe {
-                ((*self.interfaces.component_vtable).set_active)(self.interfaces.component, 0);
+                self.interfaces.component.setActive(0);
             }
         }
-
         unsafe {
-            ((*self.interfaces.component_vtable).terminate)(self.interfaces.component);
+            self.interfaces.component.terminate();
         }
-
-        self.interfaces.with_controller((), |ctrl, vt| unsafe {
-            ((*vt).terminate)(ctrl);
-        });
-
-        unsafe {
-            release_com(self.interfaces.component);
-
-            if let Some(proc) = self.interfaces.processor {
-                release_com(proc);
-            }
-            if let Some(ctrl) = self.interfaces.controller {
-                release_com(ctrl);
+        if let Some(ctrl) = &self.interfaces.controller {
+            unsafe {
+                ctrl.terminate();
             }
         }
     }

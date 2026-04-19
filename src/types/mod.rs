@@ -1,4 +1,4 @@
-//! High-level types over the raw FFI layer.
+//! High-level types over the vst3 crate's raw FFI layer.
 
 use std::ffi::c_void;
 
@@ -6,14 +6,20 @@ use smallvec::SmallVec;
 
 mod audio;
 mod events;
+mod info;
 mod params;
 mod transport;
 
 pub use audio::{AudioBuffer, BufferPtrs, Sample};
+pub(crate) use audio::{K_SAMPLE_32_INT, K_SAMPLE_64_INT};
 pub use events::{
-    vst3_event_from_midi, vst3_to_midi_event, vst3_to_note_expression, MidiEvent,
-    NoteExpressionType, NoteExpressionValue,
+    vst3_event_from_midi, vst3_to_midi_event, vst3_to_note_expression, DataEvent, EventHeader,
+    MidiEvent, NoteExpressionType, NoteExpressionValue, NoteExpressionValueEvent, NoteOffEvent,
+    NoteOnEvent, PolyPressureEvent, Vst3Event, K_DATA_EVENT, K_NOTE_EXPRESSION_VALUE_EVENT,
+    K_NOTE_OFF_EVENT, K_NOTE_ON_EVENT, K_POLY_PRESSURE_EVENT,
 };
+pub(crate) use events::{from_c_event, to_c_event};
+pub use info::{parameter_flags, BusInfo, Vst3ParameterInfo};
 pub use params::{ParameterChanges, ParameterPoint, ParameterQueue};
 pub use transport::TransportState;
 

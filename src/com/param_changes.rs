@@ -1,58 +1,42 @@
 //! IParameterChanges COM implementation.
 
-use std::ffi::c_void;
-use std::sync::atomic::AtomicU32;
-
-use super::{com_add_ref, com_release, HasRefCount};
-use crate::ffi::{IParameterChangesVtable, K_RESULT_OK};
-use crate::types::ParameterChanges;
+use parking_lot::Mutex;
+use vst3::{Class, ComWrapper};
+use vst3::Steinberg::Vst::{IParameterChanges, IParameterChangesTrait, IParamValueQueue};
 
 use super::param_queue::ParamValueQueueImpl;
+use crate::types::ParameterChanges;
 
-#[repr(C)]
 pub struct ParameterChangesImpl {
-    #[allow(dead_code)] // Accessed via raw pointer in COM vtable
-    vtable: *const IParameterChangesVtable,
-    ref_count: AtomicU32,
-    #[allow(clippy::vec_box)] // Box needed for stable pointers in COM interface
-    queues: Vec<Box<ParamValueQueueImpl>>,
+    queues: Mutex<Vec<ComWrapper<ParamValueQueueImpl>>>,
 }
 
-unsafe impl Send for ParameterChangesImpl {}
-unsafe impl Sync for ParameterChangesImpl {}
-
-impl HasRefCount for ParameterChangesImpl {
-    fn ref_count(&self) -> &AtomicU32 {
-        &self.ref_count
-    }
+impl Class for ParameterChangesImpl {
+    type Interfaces = (IParameterChanges,);
 }
 
 impl ParameterChangesImpl {
-    pub fn from_changes(changes: &ParameterChanges) -> Box<Self> {
-        let queues: Vec<Box<ParamValueQueueImpl>> = changes
+    pub fn from_changes(changes: &ParameterChanges) -> ComWrapper<Self> {
+        let queues: Vec<_> = changes
             .queues
             .iter()
             .map(ParamValueQueueImpl::from_queue)
             .collect();
 
-        Box::new(ParameterChangesImpl {
-            vtable: &PARAMETER_CHANGES_VTABLE,
-            ref_count: AtomicU32::new(1),
-            queues,
+        ComWrapper::new(Self {
+            queues: Mutex::new(queues),
         })
     }
 
-    pub fn new_empty() -> Box<Self> {
-        Box::new(ParameterChangesImpl {
-            vtable: &PARAMETER_CHANGES_VTABLE,
-            ref_count: AtomicU32::new(1),
-            queues: Vec::with_capacity(32),
+    pub fn new_empty() -> ComWrapper<Self> {
+        ComWrapper::new(Self {
+            queues: Mutex::new(Vec::with_capacity(32)),
         })
     }
 
     pub fn to_changes(&self) -> ParameterChanges {
         let mut changes = ParameterChanges::new();
-        for queue in &self.queues {
+        for queue in self.queues.lock().iter() {
             let q = queue.to_queue();
             for point in &q.points {
                 changes.add_change(q.param_id, point.sample_offset, point.value);
@@ -62,71 +46,46 @@ impl ParameterChangesImpl {
     }
 
     pub fn len(&self) -> usize {
-        self.queues.len()
+        self.queues.lock().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.queues.is_empty()
-    }
-
-    pub fn as_ptr(&mut self) -> *mut c_void {
-        self as *mut ParameterChangesImpl as *mut c_void
+        self.queues.lock().is_empty()
     }
 }
 
-static PARAMETER_CHANGES_VTABLE: IParameterChangesVtable = IParameterChangesVtable {
-    query_interface: param_changes_query_interface,
-    add_ref: param_changes_add_ref,
-    release: param_changes_release,
-    get_parameter_count: param_changes_get_parameter_count,
-    get_parameter_data: param_changes_get_parameter_data,
-    add_parameter_data: param_changes_add_parameter_data,
-};
-
-unsafe extern "system" fn param_changes_query_interface(
-    this: *mut c_void,
-    _iid: *const [u8; 16],
-    obj: *mut *mut c_void,
-) -> i32 {
-    *obj = this;
-    param_changes_add_ref(this);
-    K_RESULT_OK
-}
-
-unsafe extern "system" fn param_changes_add_ref(this: *mut c_void) -> u32 {
-    com_add_ref::<ParameterChangesImpl>(this)
-}
-
-unsafe extern "system" fn param_changes_release(this: *mut c_void) -> u32 {
-    com_release::<ParameterChangesImpl>(this)
-}
-
-unsafe extern "system" fn param_changes_get_parameter_count(this: *mut c_void) -> i32 {
-    let changes = &*(this as *const ParameterChangesImpl);
-    changes.queues.len() as i32
-}
-
-unsafe extern "system" fn param_changes_get_parameter_data(
-    this: *mut c_void,
-    index: i32,
-) -> *mut c_void {
-    let changes = &*(this as *const ParameterChangesImpl);
-    if index < 0 || index >= changes.queues.len() as i32 {
-        return std::ptr::null_mut();
+impl IParameterChangesTrait for ParameterChangesImpl {
+    unsafe fn getParameterCount(&self) -> i32 {
+        self.queues.lock().len() as i32
     }
 
-    &*changes.queues[index as usize] as *const ParamValueQueueImpl as *mut c_void
-}
+    unsafe fn getParameterData(&self, index: i32) -> *mut IParamValueQueue {
+        let queues = self.queues.lock();
+        if index < 0 || index >= queues.len() as i32 {
+            return std::ptr::null_mut();
+        }
+        // Borrowed pointer: VST3 plugins do not release queues returned here.
+        match queues[index as usize].as_com_ref::<IParamValueQueue>() {
+            Some(r) => r.as_ptr(),
+            None => std::ptr::null_mut(),
+        }
+    }
 
-unsafe extern "system" fn param_changes_add_parameter_data(
-    this: *mut c_void,
-    param_id: *const u32,
-    index: *mut i32,
-) -> *mut c_void {
-    let changes = &mut *(this as *mut ParameterChangesImpl);
-    let new_queue = ParamValueQueueImpl::new_empty(*param_id);
-    let queue_ptr = &*new_queue as *const ParamValueQueueImpl as *mut c_void;
-    changes.queues.push(new_queue);
-    *index = (changes.queues.len() - 1) as i32;
-    queue_ptr
+    unsafe fn addParameterData(&self, id: *const u32, index: *mut i32) -> *mut IParamValueQueue {
+        if id.is_null() {
+            return std::ptr::null_mut();
+        }
+        let param_id = *id;
+        let new_queue = ParamValueQueueImpl::new_empty(param_id);
+        let queue_ptr = new_queue
+            .as_com_ref::<IParamValueQueue>()
+            .map(|r| r.as_ptr())
+            .unwrap_or(std::ptr::null_mut());
+        let mut queues = self.queues.lock();
+        queues.push(new_queue);
+        if !index.is_null() {
+            *index = (queues.len() - 1) as i32;
+        }
+        queue_ptr
+    }
 }
