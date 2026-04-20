@@ -204,12 +204,10 @@ impl Vst3Instance {
     ) -> ProcessOutput {
         let empty_result = empty_process_output();
 
-        let Some(processor) = self.loaded.interfaces.processor.clone() else {
-            return empty_result;
-        };
         if !self.can_process::<T>() || buffer.num_samples == 0 {
             return empty_result;
         }
+        let processor = self.loaded.interfaces.processor.clone();
 
         let (input_ptrs, output_ptrs) = T::prepare_ffi_buffers(
             &mut self.audio.ptrs_f32,
@@ -286,10 +284,8 @@ impl Vst3Instance {
     /// Tell the plugin's audio processor to idle. Safe to call repeatedly;
     /// `Drop` calls this automatically.
     pub fn stop_processing(&mut self) {
-        if let Some(p) = &self.loaded.interfaces.processor {
-            unsafe {
-                p.setProcessing(0);
-            }
+        unsafe {
+            self.loaded.interfaces.processor.setProcessing(0);
         }
     }
 
@@ -307,14 +303,14 @@ impl Vst3Instance {
             maxSamplesPerBlock: self.audio.block_size as i32,
             sampleRate: self.audio.sample_rate,
         };
-        if let Some(ref p) = self.loaded.interfaces.processor {
-            let result = unsafe { p.setupProcessing(&mut setup) };
-            if result != kResultOk && result != kResultFalse {
-                return Err(Vst3Error::PluginError {
-                    stage: LoadStage::Setup,
-                    code: result,
-                });
-            }
+        let result = unsafe {
+            self.loaded.interfaces.processor.setupProcessing(&mut setup)
+        };
+        if result != kResultOk && result != kResultFalse {
+            return Err(Vst3Error::PluginError {
+                stage: LoadStage::Setup,
+                code: result,
+            });
         }
         Ok(())
     }
@@ -359,14 +355,12 @@ impl Vst3Instance {
             });
         }
         if active {
-            if let Some(p) = &self.loaded.interfaces.processor {
-                let result = unsafe { p.setProcessing(1) };
-                if result != kResultOk && result != kResultFalse {
-                    return Err(Vst3Error::PluginError {
-                        stage: LoadStage::Activation,
-                        code: result,
-                    });
-                }
+            let result = unsafe { self.loaded.interfaces.processor.setProcessing(1) };
+            if result != kResultOk && result != kResultFalse {
+                return Err(Vst3Error::PluginError {
+                    stage: LoadStage::Activation,
+                    code: result,
+                });
             }
         }
         Ok(())
