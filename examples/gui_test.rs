@@ -93,6 +93,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 // Open editor on first redraw if not already open
+                #[allow(clippy::collapsible_match)]
                 if !self.editor_open {
                     if let (Some(window), Some(plugin)) = (&self.window, &mut self.plugin) {
                         // Get the native window handle
