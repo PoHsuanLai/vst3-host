@@ -70,6 +70,11 @@ fn param_changes_ptr(
 
 /// Scratch buffers + event lists the realtime `process()` loop needs.
 /// Separated from [`Vst3Loaded`] so GUI-only hosting doesn't pay the cost.
+///
+/// The two `ComWrapper<ParameterChangesImpl>` slots are reused across
+/// every `process()` call: we call `refill_from_changes` / `clear_in_place`
+/// rather than re-building a fresh ComWrapper. That keeps the RT path
+/// allocation- and lock-free.
 struct AudioIO {
     sample_rate: f64,
     block_size: usize,
@@ -80,6 +85,8 @@ struct AudioIO {
     ptrs_f64: BufferPtrs<f64>,
     input_events: vst3::ComWrapper<EventList>,
     output_events: vst3::ComWrapper<EventList>,
+    input_param_changes: vst3::ComWrapper<ParameterChangesImpl>,
+    output_param_changes: vst3::ComWrapper<ParameterChangesImpl>,
 }
 
 /// Fully-active VST3 plugin ready to process audio.
@@ -140,6 +147,8 @@ impl Vst3Instance {
             ptrs_f64: BufferPtrs::new(input_ptr_count, output_ptr_count),
             input_events: EventList::new(),
             output_events: EventList::new(),
+            input_param_changes: ParameterChangesImpl::new_empty(),
+            output_param_changes: ParameterChangesImpl::new_empty(),
         };
 
         let mut instance = Self { loaded, audio };
@@ -256,10 +265,17 @@ impl Vst3Instance {
         let input_events_ptr = event_list_ptr(&self.audio.input_events);
         let output_events_ptr = event_list_ptr(&self.audio.output_events);
 
-        let input_param_changes = param_changes
-            .filter(|pc| !pc.is_empty())
-            .map(ParameterChangesImpl::from_changes);
-        let output_param_changes = ParameterChangesImpl::new_empty();
+        // Refill the pooled input/output ParameterChanges wrappers in
+        // place instead of building fresh ComWrappers every block.
+        let have_input_params = param_changes.map(|pc| !pc.is_empty()).unwrap_or(false);
+        if have_input_params {
+            self.audio
+                .input_param_changes
+                .refill_from_changes(param_changes.unwrap());
+        } else {
+            self.audio.input_param_changes.clear_in_place();
+        }
+        self.audio.output_param_changes.clear_in_place();
 
         let mut process_context = transport.to_process_context();
         process_context.sampleRate = buffer.sample_rate;
@@ -272,8 +288,12 @@ impl Vst3Instance {
             numOutputs: 1,
             inputs: &mut input_bus,
             outputs: &mut output_bus,
-            inputParameterChanges: param_changes_ptr(input_param_changes.as_ref()),
-            outputParameterChanges: param_changes_ptr(Some(&output_param_changes)),
+            inputParameterChanges: if have_input_params {
+                param_changes_ptr(Some(&self.audio.input_param_changes))
+            } else {
+                std::ptr::null_mut()
+            },
+            outputParameterChanges: param_changes_ptr(Some(&self.audio.output_param_changes)),
             inputEvents: input_events_ptr,
             outputEvents: output_events_ptr,
             processContext: &mut process_context,
@@ -288,7 +308,7 @@ impl Vst3Instance {
 
         ProcessOutput {
             midi_events: self.audio.output_events.to_midi_events(),
-            parameter_changes: output_param_changes.to_changes(),
+            parameter_changes: self.audio.output_param_changes.to_changes(),
         }
     }
 

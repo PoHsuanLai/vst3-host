@@ -1,6 +1,17 @@
 //! IEventList COM implementation.
+//!
+//! # Real-time safety
+//!
+//! Inner storage lives in an [`AudioThreadCell`] rather than a `Mutex`.
+//! VST3's event-list contract is single-threaded inside
+//! `IAudioProcessor::process` — host stages events, plugin reads them,
+//! then host clears them on the next buffer. All of that happens on the
+//! audio thread, so the lock is pure overhead.
+//!
+//! The cell enforces the single-thread discipline with a debug-build
+//! thread-identity assertion and compiles to a bare `UnsafeCell` in
+//! release; see [`crate::rt_cell`] for the wrapper.
 
-use parking_lot::Mutex;
 use smallvec::SmallVec;
 use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
@@ -8,6 +19,7 @@ use vst3::Steinberg::{
     Vst::{Event, IEventList, IEventListTrait},
 };
 
+use crate::rt_cell::AudioThreadCell;
 use crate::types::{
     from_c_event, to_c_event, vst3_event_from_midi, vst3_to_midi_event, vst3_to_note_expression,
     MidiEvent, NoteExpressionValue, Vst3Event,
@@ -30,7 +42,7 @@ impl Default for Inner {
 }
 
 pub struct EventList {
-    inner: Mutex<Inner>,
+    inner: AudioThreadCell<Inner>,
 }
 
 impl Class for EventList {
@@ -40,12 +52,12 @@ impl Class for EventList {
 impl EventList {
     pub fn new() -> ComWrapper<Self> {
         ComWrapper::new(Self {
-            inner: Mutex::new(Inner::default()),
+            inner: AudioThreadCell::new(Inner::default()),
         })
     }
 
     pub fn update_from_midi(&self, midi_events: &[MidiEvent]) {
-        let mut inner = self.inner.lock();
+        let inner = self.inner.borrow_mut();
         inner.events.clear();
         inner.c_scratch_data.clear();
         inner
@@ -58,7 +70,7 @@ impl EventList {
         midi_events: &[MidiEvent],
         note_expressions: &[NoteExpressionValue],
     ) {
-        let mut inner = self.inner.lock();
+        let inner = self.inner.borrow_mut();
         inner.events.clear();
         inner.c_scratch_data.clear();
         inner
@@ -71,22 +83,22 @@ impl EventList {
     }
 
     pub fn clear(&self) {
-        let mut inner = self.inner.lock();
+        let inner = self.inner.borrow_mut();
         inner.events.clear();
         inner.c_scratch_data.clear();
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().events.len()
+        self.inner.borrow().events.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().events.is_empty()
+        self.inner.borrow().events.is_empty()
     }
 
     pub fn to_midi_events(&self) -> SmallVec<[MidiEvent; 64]> {
         self.inner
-            .lock()
+            .borrow()
             .events
             .iter()
             .filter_map(vst3_to_midi_event)
@@ -95,24 +107,30 @@ impl EventList {
 
     pub fn to_note_expressions(&self) -> SmallVec<[NoteExpressionValue; 16]> {
         self.inner
-            .lock()
+            .borrow()
             .events
             .iter()
             .filter_map(vst3_to_note_expression)
             .collect()
     }
+
+    /// Reset the audio-thread owner. Call when the host switches to a new
+    /// audio stream (the next `process` call will re-claim ownership).
+    pub fn reset_owner(&self) {
+        self.inner.reset_owner();
+    }
 }
 
 impl IEventListTrait for EventList {
     unsafe fn getEventCount(&self) -> i32 {
-        self.inner.lock().events.len() as i32
+        self.inner.borrow().events.len() as i32
     }
 
     unsafe fn getEvent(&self, index: i32, e: *mut Event) -> tresult {
         if e.is_null() {
             return kInvalidArgument;
         }
-        let mut inner = self.inner.lock();
+        let inner = self.inner.borrow_mut();
         if index < 0 || index >= inner.events.len() as i32 {
             return kInvalidArgument;
         }
@@ -120,7 +138,7 @@ impl IEventListTrait for EventList {
             events,
             c_scratch_data,
             ..
-        } = &mut *inner;
+        } = inner;
         let event = events[index as usize];
         *e = to_c_event(&event, c_scratch_data);
         kResultOk
@@ -133,7 +151,7 @@ impl IEventListTrait for EventList {
         let c_event = &*e;
         match from_c_event(c_event) {
             Some(ev) => {
-                self.inner.lock().events.push(ev);
+                self.inner.borrow_mut().events.push(ev);
                 kResultOk
             }
             None => kInvalidArgument,
@@ -188,7 +206,7 @@ mod tests {
     fn test_get_event_valid() {
         let list = EventList::new();
         list.inner
-            .lock()
+            .borrow_mut()
             .events
             .push(Vst3Event::NoteOn(make_note_on()));
         let ptr = list.to_com_ptr::<IEventList>().unwrap();

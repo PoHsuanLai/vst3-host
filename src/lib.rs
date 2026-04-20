@@ -15,6 +15,7 @@ pub(crate) mod com;
 pub mod error;
 pub(crate) mod helpers;
 pub mod host;
+pub(crate) mod rt_cell;
 pub mod types;
 
 pub use error::{LoadStage, Result, Vst3Error};

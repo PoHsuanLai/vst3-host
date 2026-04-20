@@ -1,17 +1,35 @@
 //! IParamValueQueue COM implementation.
+//!
+//! # Real-time safety
+//!
+//! Inner storage uses [`AudioThreadCell`] rather than a `Mutex`. VST3
+//! queues are only touched during `IAudioProcessor::process`, which is
+//! single-threaded on the audio thread — the lock is unnecessary
+//! overhead.
+//!
+//! [`refill_from_queue`](ParamValueQueueImpl::refill_from_queue) lets
+//! callers recycle a single `ComWrapper<ParamValueQueueImpl>` across
+//! buffers; it keeps the inline `SmallVec` storage (16 points) and only
+//! spills to the heap for unusually dense automation.
 
-use parking_lot::Mutex;
+use smallvec::SmallVec;
 use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kInvalidArgument, kResultOk, tresult,
     Vst::{IParamValueQueue, IParamValueQueueTrait},
 };
 
+use crate::rt_cell::AudioThreadCell;
 use crate::types::{ParameterPoint, ParameterQueue};
 
+/// Typical automation carries a handful of points per buffer. Values past
+/// the inline capacity spill to the heap — rare and not on the hot path
+/// once the caller has warmed up the queue off-RT.
+const INLINE_POINTS: usize = 16;
+
 pub struct ParamValueQueueImpl {
-    param_id: u32,
-    points: Mutex<Vec<ParameterPoint>>,
+    param_id: AudioThreadCell<u32>,
+    points: AudioThreadCell<SmallVec<[ParameterPoint; INLINE_POINTS]>>,
 }
 
 impl Class for ParamValueQueueImpl {
@@ -19,52 +37,73 @@ impl Class for ParamValueQueueImpl {
 }
 
 impl ParamValueQueueImpl {
+    /// Build a queue from an existing [`ParameterQueue`]. Primarily for
+    /// tests and non-RT helpers; the RT path prefers [`new_empty`] +
+    /// [`refill_from_queue`] to reuse the ComWrapper across buffers.
     pub fn from_queue(queue: &ParameterQueue) -> ComWrapper<Self> {
+        let mut points = SmallVec::with_capacity(queue.points.len().max(INLINE_POINTS));
+        points.extend_from_slice(&queue.points);
         ComWrapper::new(Self {
-            param_id: queue.param_id,
-            points: Mutex::new(queue.points.to_vec()),
+            param_id: AudioThreadCell::new(queue.param_id),
+            points: AudioThreadCell::new(points),
         })
     }
 
     pub fn new_empty(param_id: u32) -> ComWrapper<Self> {
         ComWrapper::new(Self {
-            param_id,
-            points: Mutex::new(Vec::with_capacity(16)),
+            param_id: AudioThreadCell::new(param_id),
+            points: AudioThreadCell::new(SmallVec::new()),
         })
     }
 
+    /// Replace this queue's contents with `queue`'s points in place.
+    /// Allocation-free when `queue.points.len() <= capacity` (inline up to
+    /// 16, or whatever the current heap capacity is after prior reuse).
+    pub fn refill_from_queue(&self, queue: &ParameterQueue) {
+        *self.param_id.borrow_mut() = queue.param_id;
+        let points = self.points.borrow_mut();
+        points.clear();
+        points.extend_from_slice(&queue.points);
+    }
+
     pub fn to_queue(&self) -> ParameterQueue {
-        let mut queue = ParameterQueue::new(self.param_id);
-        for point in self.points.lock().iter() {
+        let mut queue = ParameterQueue::new(self.param_id());
+        for point in self.points.borrow().iter() {
             queue.add_point(point.sample_offset, point.value);
         }
         queue
     }
 
     pub fn param_id(&self) -> u32 {
-        self.param_id
+        *self.param_id.borrow()
     }
 
     pub fn len(&self) -> usize {
-        self.points.lock().len()
+        self.points.borrow().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.points.lock().is_empty()
+        self.points.borrow().is_empty()
+    }
+
+    /// Reset the audio-thread owner (see [`AudioThreadCell::reset_owner`]).
+    pub fn reset_owner(&self) {
+        self.param_id.reset_owner();
+        self.points.reset_owner();
     }
 }
 
 impl IParamValueQueueTrait for ParamValueQueueImpl {
     unsafe fn getParameterId(&self) -> u32 {
-        self.param_id
+        *self.param_id.borrow()
     }
 
     unsafe fn getPointCount(&self) -> i32 {
-        self.points.lock().len() as i32
+        self.points.borrow().len() as i32
     }
 
     unsafe fn getPoint(&self, index: i32, sample_offset: *mut i32, value: *mut f64) -> tresult {
-        let points = self.points.lock();
+        let points = self.points.borrow();
         if index < 0 || index >= points.len() as i32 {
             return kInvalidArgument;
         }
@@ -84,7 +123,7 @@ impl IParamValueQueueTrait for ParamValueQueueImpl {
         value: f64,
         index: *mut i32,
     ) -> tresult {
-        let mut points = self.points.lock();
+        let points = self.points.borrow_mut();
         points.push(ParameterPoint {
             sample_offset,
             value,
