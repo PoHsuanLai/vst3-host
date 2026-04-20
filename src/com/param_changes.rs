@@ -14,8 +14,8 @@
 //! so the RT path makes no new heap allocations once the process loop
 //! has warmed up.
 
+use vst3::Steinberg::Vst::{IParamValueQueue, IParameterChanges, IParameterChangesTrait};
 use vst3::{Class, ComWrapper};
-use vst3::Steinberg::Vst::{IParameterChanges, IParameterChangesTrait, IParamValueQueue};
 
 use super::param_queue::ParamValueQueueImpl;
 use crate::rt_cell::AudioThreadCell;

@@ -5,10 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use libloading::Library;
-use vst3::{ComPtr, Interface};
 use vst3::Steinberg::{
     kResultOk, FIDString, IPluginFactory, IPluginFactoryTrait, PClassInfo, PFactoryInfo, TUID,
 };
+use vst3::{ComPtr, Interface};
 
 use crate::error::{LoadStage, Result, Vst3Error};
 use crate::helpers::c_str_to_string;
@@ -67,13 +67,12 @@ impl Vst3Library {
         };
 
         let factory_ptr = unsafe { get_factory() };
-        let factory = unsafe { ComPtr::from_raw(factory_ptr) }.ok_or_else(|| {
-            Vst3Error::LoadFailed {
+        let factory =
+            unsafe { ComPtr::from_raw(factory_ptr) }.ok_or_else(|| Vst3Error::LoadFailed {
                 path: lib_path.to_path_buf(),
                 stage: LoadStage::Factory,
                 reason: "GetPluginFactory returned null".to_string(),
-            }
-        })?;
+            })?;
 
         Ok(Arc::new(Self {
             _library: library,

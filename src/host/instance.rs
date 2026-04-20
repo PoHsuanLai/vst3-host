@@ -16,8 +16,8 @@ use smallvec::SmallVec;
 use vst3::Steinberg::{
     kResultFalse, kResultOk,
     Vst::{
-        IAudioProcessorTrait, IComponentTrait, IEventList, IParameterChanges,
-        MediaTypes_::kEvent, ProcessModes_::kRealtime, ProcessSetup,
+        IAudioProcessorTrait, IComponentTrait, IEventList, IParameterChanges, MediaTypes_::kEvent,
+        ProcessModes_::kRealtime, ProcessSetup,
     },
 };
 
@@ -165,8 +165,7 @@ impl Vst3Instance {
         let _ = self.set_active(false);
         // Move `loaded` out without running `Vst3Instance::Drop` (which would
         // deactivate a second time).
-        let loaded =
-            unsafe { std::ptr::read(&self.loaded as *const Vst3Loaded) };
+        let loaded = unsafe { std::ptr::read(&self.loaded as *const Vst3Loaded) };
         std::mem::forget(self);
         loaded
     }
@@ -314,8 +313,7 @@ impl Vst3Instance {
 
     /// True if this instance can process buffers of sample type `T`.
     fn can_process<T: Sample>(&self) -> bool {
-        T::VST3_SYMBOLIC_SIZE != crate::types::K_SAMPLE_64_INT
-            || self.loaded.info.supports_f64
+        T::VST3_SYMBOLIC_SIZE != crate::types::K_SAMPLE_64_INT || self.loaded.info.supports_f64
     }
 
     /// Load the input event list with MIDI + note-expression events for the
@@ -354,9 +352,7 @@ impl Vst3Instance {
             maxSamplesPerBlock: self.audio.block_size as i32,
             sampleRate: self.audio.sample_rate,
         };
-        let result = unsafe {
-            self.loaded.interfaces.processor.setupProcessing(&mut setup)
-        };
+        let result = unsafe { self.loaded.interfaces.processor.setupProcessing(&mut setup) };
         if result != kResultOk && result != kResultFalse {
             return Err(Vst3Error::PluginError {
                 stage: LoadStage::Setup,

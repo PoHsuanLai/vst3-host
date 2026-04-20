@@ -2,7 +2,6 @@
 //! component/controller halves when they are separate objects.
 
 use parking_lot::Mutex;
-use vst3::{Class, ComPtr, ComWrapper};
 use vst3::Steinberg::{
     kNotImplemented, kResultOk, tresult,
     Vst::{
@@ -10,6 +9,7 @@ use vst3::Steinberg::{
         IMessageTrait,
     },
 };
+use vst3::{Class, ComPtr, ComWrapper};
 
 type MessageCallback = Mutex<Option<Box<dyn Fn(&[u8]) + Send + Sync>>>;
 

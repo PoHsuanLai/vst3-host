@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kInvalidArgument, kResultOk, tresult, TBool,
     Vst::{
@@ -15,6 +14,7 @@ use vst3::Steinberg::{
         IAudioProcessor, IDataExchangeHandler, IDataExchangeHandlerTrait,
     },
 };
+use vst3::{Class, ComWrapper};
 
 #[derive(Debug, Clone)]
 pub struct DataBlock {

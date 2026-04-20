@@ -10,9 +10,8 @@ use std::sync::Arc;
 
 use crossbeam_channel::Receiver;
 use vst3::com_scrape_types::Unknown;
-use vst3::{ComPtr, ComWrapper};
 use vst3::Steinberg::{
-    kResultFalse, kResultOk, FUnknown, IBStream, IPluginBaseTrait, IPlugView, IPlugViewTrait,
+    kResultFalse, kResultOk, FUnknown, IBStream, IPlugView, IPlugViewTrait, IPluginBaseTrait,
     ViewRect,
     Vst::{
         BusDirections_::{kInput, kOutput},
@@ -21,11 +20,12 @@ use vst3::Steinberg::{
         MediaTypes_::kAudio,
     },
 };
+use vst3::{ComPtr, ComWrapper};
 
-#[cfg(target_os = "macos")]
-use vst3::Steinberg::kPlatformTypeNSView;
 #[cfg(target_os = "windows")]
 use vst3::Steinberg::kPlatformTypeHWND;
+#[cfg(target_os = "macos")]
+use vst3::Steinberg::kPlatformTypeNSView;
 #[cfg(target_os = "linux")]
 use vst3::Steinberg::kPlatformTypeX11EmbedWindowID;
 
@@ -155,7 +155,12 @@ impl Vst3Loaded {
         let class = find_audio_class(&library, path)?;
         let component: ComPtr<IComponent> = library.create_instance(&class.cid)?;
         let processor = component.cast::<IAudioProcessor>();
-        Ok(build_plugin_info_raw(&library, &component, processor.as_ref(), &class))
+        Ok(build_plugin_info_raw(
+            &library,
+            &component,
+            processor.as_ref(),
+            &class,
+        ))
     }
 
     /// Load a VST3 plugin for GUI / parameter work only — no audio processing
@@ -183,13 +188,14 @@ impl Vst3Loaded {
 
         let class = find_audio_class(&library, path)?;
         let component: ComPtr<IComponent> = library.create_instance(&class.cid)?;
-        let processor = component.cast::<IAudioProcessor>().ok_or_else(|| {
-            Vst3Error::LoadFailed {
-                path: path.to_path_buf(),
-                stage: LoadStage::Instantiation,
-                reason: "VST3 plugin does not support IAudioProcessor".to_string(),
-            }
-        })?;
+        let processor =
+            component
+                .cast::<IAudioProcessor>()
+                .ok_or_else(|| Vst3Error::LoadFailed {
+                    path: path.to_path_buf(),
+                    stage: LoadStage::Instantiation,
+                    reason: "VST3 plugin does not support IAudioProcessor".to_string(),
+                })?;
         let controller = query_controller(&component, &library);
         let info = build_plugin_info(&library, &component, &processor, &class);
 
@@ -452,9 +458,13 @@ impl Vst3Loaded {
     /// [`Vst3Error::PluginError`](crate::Vst3Error::PluginError) if
     /// `IPlugView::attached` fails.
     pub fn open_editor(&mut self, parent: WindowHandle) -> Result<EditorSize> {
-        let ctrl = self.interfaces.controller.as_ref().ok_or(
-            Vst3Error::NotSupported("Plugin has no editor controller".to_string()),
-        )?;
+        let ctrl = self
+            .interfaces
+            .controller
+            .as_ref()
+            .ok_or(Vst3Error::NotSupported(
+                "Plugin has no editor controller".to_string(),
+            ))?;
 
         let view_raw = unsafe { ctrl.createView(c"editor".as_ptr()) };
         let view = unsafe { ComPtr::from_raw(view_raw) }.ok_or(Vst3Error::NotSupported(
@@ -485,10 +495,10 @@ impl Vst3Loaded {
     /// Close the editor if open, calling `IPlugView::removed`. No-op otherwise.
     /// Called automatically on `Drop`.
     pub fn close_editor(&mut self) -> &mut Self {
-        if let EditorState::Open(view) =
-            std::mem::replace(&mut self.editor, EditorState::Closed)
-        {
-            unsafe { view.removed(); }
+        if let EditorState::Open(view) = std::mem::replace(&mut self.editor, EditorState::Closed) {
+            unsafe {
+                view.removed();
+            }
         }
         self
     }
@@ -523,7 +533,9 @@ impl Vst3Loaded {
         self.reconcile_bus_counts();
 
         if let Controller::Separate(ctrl) = &self.interfaces.controller {
-            unsafe { let _ = ctrl.initialize(host_ptr); }
+            unsafe {
+                let _ = ctrl.initialize(host_ptr);
+            }
             let ctrl = ctrl.clone();
             self.connect_separate_controller(&ctrl);
         }
@@ -574,7 +586,9 @@ impl Vst3Loaded {
             .as_com_ref::<vst3::Steinberg::Vst::IComponentHandler>()
             .map(|r| r.as_ptr())
             .unwrap_or(std::ptr::null_mut());
-        unsafe { let _ = ctrl.setComponentHandler(handler_ptr); }
+        unsafe {
+            let _ = ctrl.setComponentHandler(handler_ptr);
+        }
     }
 }
 
@@ -628,7 +642,12 @@ fn ensure_has_classes(library: &Vst3Library, path: &Path) -> Result<()> {
 /// Read the plug-view's `getSize()` and translate it into our `(width, height)`
 /// tuple. Returns `None` if the view refuses — callers fall back to a default.
 fn query_view_size(view: &ComPtr<IPlugView>) -> Option<(u32, u32)> {
-    let mut rect = ViewRect { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut rect = ViewRect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     let result = unsafe { view.getSize(&mut rect) };
     if result == kResultOk {
         Some((
@@ -656,9 +675,7 @@ fn build_plugin_info_raw(
     let num_inputs = get_bus_channel_count(component, K_INPUT, 0).unwrap_or(0);
     let num_outputs = get_bus_channel_count(component, K_OUTPUT, 1).unwrap_or(2);
     let supports_f64 = processor
-        .map(|p| unsafe {
-            p.canProcessSampleSize(crate::types::K_SAMPLE_64_INT) == kResultOk
-        })
+        .map(|p| unsafe { p.canProcessSampleSize(crate::types::K_SAMPLE_64_INT) == kResultOk })
         .unwrap_or(false);
     let receives_midi =
         unsafe { component.getBusCount(crate::host::instance::K_EVENT, K_INPUT) > 0 };

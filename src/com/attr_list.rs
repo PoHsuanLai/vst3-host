@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
 
 use parking_lot::Mutex;
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kInvalidArgument, kResultOk, tresult,
     Vst::{IAttributeList, IAttributeListTrait, IAttributeList_::AttrID, TChar},
 };
+use vst3::{Class, ComWrapper};
 
 #[derive(Clone, Debug)]
 enum AttributeValue {

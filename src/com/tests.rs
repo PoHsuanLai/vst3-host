@@ -94,7 +94,10 @@ fn test_component_handler_restart() {
     }
 
     let event = rx.recv_timeout(Duration::from_millis(100)).unwrap();
-    assert!(matches!(event, ParameterEditEvent::RestartComponent(0b1010)));
+    assert!(matches!(
+        event,
+        ParameterEditEvent::RestartComponent(0b1010)
+    ));
 }
 
 #[test]

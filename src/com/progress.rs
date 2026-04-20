@@ -4,13 +4,15 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kResultOk, tresult,
     Vst::{
-        IProgress, IProgress_::{ID, ProgressType}, IProgressTrait, ParamValue,
+        IProgress, IProgressTrait,
+        IProgress_::{ProgressType, ID},
+        ParamValue,
     },
 };
+use vst3::{Class, ComWrapper};
 
 use crate::helpers::utf16_to_string;
 

@@ -5,18 +5,19 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_channel::{Receiver, Sender};
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kResultOk, tresult, FIDString, IPlugView, TBool,
     Vst::{
         BusDirection, IComponentHandler, IComponentHandler2, IComponentHandler2Trait,
         IComponentHandler3, IComponentHandler3Trait, IComponentHandlerBusActivation,
         IComponentHandlerBusActivationTrait, IComponentHandlerTrait, IContextMenu, IProgress,
+        IProgressTrait,
         IProgress_::{ProgressType, ID},
-        IProgressTrait, IUnitHandler, IUnitHandler2, IUnitHandler2Trait, IUnitHandlerTrait,
-        MediaType, ParamID, ParamValue, ProgramListID, UnitID,
+        IUnitHandler, IUnitHandler2, IUnitHandler2Trait, IUnitHandlerTrait, MediaType, ParamID,
+        ParamValue, ProgramListID, UnitID,
     },
 };
+use vst3::{Class, ComWrapper};
 
 use crate::helpers::utf16_to_string;
 

@@ -140,8 +140,8 @@ impl TransportState {
                 state |= StatesAndFlags_::kRecording as u32;
             }
             if self.cycle_active {
-                state |= (StatesAndFlags_::kCycleActive as u32)
-                    | (StatesAndFlags_::kCycleValid as u32);
+                state |=
+                    (StatesAndFlags_::kCycleActive as u32) | (StatesAndFlags_::kCycleValid as u32);
             }
             state |= (StatesAndFlags_::kProjectTimeMusicValid as u32)
                 | (StatesAndFlags_::kBarPositionValid as u32)

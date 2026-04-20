@@ -13,11 +13,11 @@
 //! spills to the heap for unusually dense automation.
 
 use smallvec::SmallVec;
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kInvalidArgument, kResultOk, tresult,
     Vst::{IParamValueQueue, IParamValueQueueTrait},
 };
+use vst3::{Class, ComWrapper};
 
 use crate::rt_cell::AudioThreadCell;
 use crate::types::{ParameterPoint, ParameterQueue};
@@ -65,7 +65,6 @@ impl ParamValueQueueImpl {
         points.clear();
         points.extend_from_slice(&queue.points);
     }
-
 
     pub fn to_queue(&self) -> ParameterQueue {
         let mut queue = ParameterQueue::new(self.param_id());
@@ -118,12 +117,7 @@ impl IParamValueQueueTrait for ParamValueQueueImpl {
         kResultOk
     }
 
-    unsafe fn addPoint(
-        &self,
-        sample_offset: i32,
-        value: f64,
-        index: *mut i32,
-    ) -> tresult {
+    unsafe fn addPoint(&self, sample_offset: i32, value: f64, index: *mut i32) -> tresult {
         let points = self.points.borrow_mut();
         points.push(ParameterPoint {
             sample_offset,
@@ -174,7 +168,7 @@ mod tests {
     fn refill_from_queue_steady_state_is_allocation_free_after_grow() {
         let queue = ParamValueQueueImpl::new_empty(0);
         let big = queue_with_points(32); // > INLINE_POINTS
-        // Grow first (outside the no-alloc scope).
+                                         // Grow first (outside the no-alloc scope).
         queue.refill_from_queue(&big);
 
         assert_no_alloc::assert_no_alloc(|| {

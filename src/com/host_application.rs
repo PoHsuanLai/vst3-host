@@ -3,14 +3,15 @@
 
 use std::ffi::c_void;
 
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
-    kInvalidArgument, kNotImplemented, kResultFalse, kResultOk, tresult, TUID,
+    kInvalidArgument, kNotImplemented, kResultFalse, kResultOk, tresult,
     Vst::{
         IAttributeList, IHostApplication, IHostApplicationTrait, IMessage, IPlugInterfaceSupport,
         IPlugInterfaceSupportTrait, String128,
     },
+    TUID,
 };
+use vst3::{Class, ComWrapper};
 
 use super::attr_list::AttributeList;
 use super::message::Message;

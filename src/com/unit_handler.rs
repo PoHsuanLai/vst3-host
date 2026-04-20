@@ -3,13 +3,13 @@
 //! unit-test harness.
 
 use crossbeam_channel::{Receiver, Sender};
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kResultOk, tresult,
     Vst::{
         IUnitHandler, IUnitHandler2, IUnitHandler2Trait, IUnitHandlerTrait, ProgramListID, UnitID,
     },
 };
+use vst3::{Class, ComWrapper};
 
 /// Unit / program-list change notifications from the plugin. Delivered via
 /// [`Vst3Loaded::unit_event_receiver`](crate::Vst3Loaded::unit_event_receiver).

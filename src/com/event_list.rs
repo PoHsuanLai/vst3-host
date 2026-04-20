@@ -13,11 +13,11 @@
 //! release; see [`crate::rt_cell`] for the wrapper.
 
 use smallvec::SmallVec;
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kInvalidArgument, kResultOk, tresult,
     Vst::{Event, IEventList, IEventListTrait},
 };
+use vst3::{Class, ComWrapper};
 
 use crate::rt_cell::AudioThreadCell;
 use crate::types::{

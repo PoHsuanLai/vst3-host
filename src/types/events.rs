@@ -527,8 +527,7 @@ mod tests {
     #[test]
     fn poly_pressure_lands_in_poly_pressure_variant() {
         use tutti_midi::convert::midi1_cc_to_midi2;
-        let event =
-            MidiEvent::poly_pressure(0, 1, 60, midi1_cc_to_midi2(100)).with_frame_offset(0);
+        let event = MidiEvent::poly_pressure(0, 1, 60, midi1_cc_to_midi2(100)).with_frame_offset(0);
         let vst3 = vst3_event_from_midi(&event).expect("PolyPressure should convert");
         assert!(matches!(vst3, Vst3Event::PolyPressure(_)));
         let back = vst3_to_midi_event(&vst3).expect("round-trip");

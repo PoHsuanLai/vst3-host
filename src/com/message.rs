@@ -4,11 +4,11 @@
 use std::ffi::{CStr, CString};
 
 use parking_lot::Mutex;
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     FIDString,
     Vst::{IAttributeList, IMessage, IMessageTrait},
 };
+use vst3::{Class, ComWrapper};
 
 use super::attr_list::AttributeList;
 

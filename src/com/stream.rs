@@ -4,11 +4,11 @@ use std::ffi::c_void;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
 use parking_lot::Mutex;
-use vst3::{Class, ComWrapper};
 use vst3::Steinberg::{
     kInvalidArgument, kResultOk, tresult, IBStream, IBStreamTrait,
     IBStream_::IStreamSeekMode_::{kIBSeekCur, kIBSeekEnd, kIBSeekSet},
 };
+use vst3::{Class, ComWrapper};
 
 /// COM-wrapped in-memory stream.
 ///
@@ -191,9 +191,7 @@ mod tests {
         with_ptr(&stream, |ptr| {
             let mut buf = [0u8; 8];
             let mut bytes_read = 99i32;
-            let result = unsafe {
-                ptr.read(buf.as_mut_ptr() as *mut c_void, -1, &mut bytes_read)
-            };
+            let result = unsafe { ptr.read(buf.as_mut_ptr() as *mut c_void, -1, &mut bytes_read) };
             assert_ne!(result, kResultOk);
             assert_eq!(bytes_read, 0);
         });
@@ -205,9 +203,7 @@ mod tests {
         with_ptr(&stream, |ptr| {
             let mut buf = [0u8; 8];
             let mut bytes_read = 99i32;
-            let result = unsafe {
-                ptr.read(buf.as_mut_ptr() as *mut c_void, 0, &mut bytes_read)
-            };
+            let result = unsafe { ptr.read(buf.as_mut_ptr() as *mut c_void, 0, &mut bytes_read) };
             assert_eq!(result, kResultOk);
             assert_eq!(bytes_read, 0);
         });
@@ -230,9 +226,7 @@ mod tests {
         let data = [1u8, 2, 3];
         with_ptr(&stream, |ptr| {
             let mut bytes_written = 99i32;
-            let result = unsafe {
-                ptr.write(data.as_ptr() as *mut c_void, -5, &mut bytes_written)
-            };
+            let result = unsafe { ptr.write(data.as_ptr() as *mut c_void, -5, &mut bytes_written) };
             assert_ne!(result, kResultOk);
             assert_eq!(bytes_written, 0);
         });
@@ -245,9 +239,7 @@ mod tests {
         let data = [1u8, 2, 3];
         with_ptr(&stream, |ptr| {
             let mut bytes_written = 99i32;
-            let result = unsafe {
-                ptr.write(data.as_ptr() as *mut c_void, 0, &mut bytes_written)
-            };
+            let result = unsafe { ptr.write(data.as_ptr() as *mut c_void, 0, &mut bytes_written) };
             assert_eq!(result, kResultOk);
             assert_eq!(bytes_written, 0);
         });
@@ -258,8 +250,7 @@ mod tests {
         let stream = BStream::new();
         with_ptr(&stream, |ptr| {
             let mut bytes_written = 99i32;
-            let result =
-                unsafe { ptr.write(std::ptr::null_mut(), 10, &mut bytes_written) };
+            let result = unsafe { ptr.write(std::ptr::null_mut(), 10, &mut bytes_written) };
             assert_ne!(result, kResultOk);
             assert_eq!(bytes_written, 0);
         });
@@ -270,9 +261,8 @@ mod tests {
         let stream = BStream::from_data(vec![1, 2, 3]);
         with_ptr(&stream, |ptr| {
             let mut buf = [0u8; 8];
-            let result = unsafe {
-                ptr.read(buf.as_mut_ptr() as *mut c_void, 3, std::ptr::null_mut())
-            };
+            let result =
+                unsafe { ptr.read(buf.as_mut_ptr() as *mut c_void, 3, std::ptr::null_mut()) };
             assert_eq!(result, kResultOk);
             assert_eq!(&buf[..3], &[1, 2, 3]);
         });
