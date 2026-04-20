@@ -2,15 +2,27 @@
 
 use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_;
 
+/// Host transport snapshot passed to the plugin on every
+/// [`process`](crate::Vst3Instance::process) call via `ProcessContext`.
+///
+/// Construct via [`TransportState::new`] + builder methods; the
+/// [`TransportState::to_process_context`] method encodes the correct validity
+/// flags VST3 plugins expect.
 #[derive(Debug, Clone)]
 pub struct TransportState {
+    /// True if the transport is playing.
     pub playing: bool,
+    /// True if the transport is recording.
     pub recording: bool,
+    /// True if loop / cycle region is active.
     pub cycle_active: bool,
     /// BPM
     pub tempo: f64,
+    /// Time-signature numerator (top number).
     pub time_sig_numerator: i32,
+    /// Time-signature denominator (bottom number, always a power of 2).
     pub time_sig_denominator: i32,
+    /// Project time in samples.
     pub position_samples: i64,
     /// Quarter notes
     pub position_beats: f64,
@@ -44,62 +56,76 @@ impl Default for TransportState {
 }
 
 impl TransportState {
+    /// Create a stopped transport at 120 BPM, 4/4, 44.1 kHz.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Set the playing flag.
     pub fn playing(mut self, playing: bool) -> Self {
         self.playing = playing;
         self
     }
 
+    /// Set the recording flag.
     pub fn recording(mut self, recording: bool) -> Self {
         self.recording = recording;
         self
     }
 
+    /// Set the cycle-active flag.
     pub fn cycle_active(mut self, active: bool) -> Self {
         self.cycle_active = active;
         self
     }
 
+    /// Set tempo in BPM.
     pub fn tempo(mut self, bpm: f64) -> Self {
         self.tempo = bpm;
         self
     }
 
+    /// Set time signature (e.g. `.time_signature(7, 8)` for 7/8).
     pub fn time_signature(mut self, numerator: i32, denominator: i32) -> Self {
         self.time_sig_numerator = numerator;
         self.time_sig_denominator = denominator;
         self
     }
 
+    /// Set position in samples.
     pub fn position_samples(mut self, samples: i64) -> Self {
         self.position_samples = samples;
         self
     }
 
+    /// Set position in quarter notes from the project start.
     pub fn position_beats(mut self, beats: f64) -> Self {
         self.position_beats = beats;
         self
     }
 
+    /// Set the position of the current bar in quarter notes.
     pub fn bar_position_beats(mut self, beats: f64) -> Self {
         self.bar_position_beats = beats;
         self
     }
 
+    /// Set the cycle/loop start and end in quarter notes.
     pub fn cycle_range(mut self, start: f64, end: f64) -> Self {
         self.cycle_start_beats = start;
         self.cycle_end_beats = end;
         self
     }
 
+    /// Set sample rate in Hz.
     pub fn sample_rate(mut self, rate: f64) -> Self {
         self.sample_rate = rate;
         self
     }
 
+    /// Build the VST3 `ProcessContext` with appropriate state bits and
+    /// validity flags set (`kProjectTimeMusicValid`, `kBarPositionValid`,
+    /// `kTempoValid`, `kTimeSigValid`).
     pub fn to_process_context(&self) -> vst3::Steinberg::Vst::ProcessContext {
         // `StatesAndFlags_::*` is `u32` on unix, `c_int` (i32) on Windows — the casts
         // below are no-ops on one target and sign-changes on the other. Cleanest is

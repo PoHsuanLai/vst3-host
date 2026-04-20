@@ -1,5 +1,4 @@
-//! Active VST3 processing state. Embeds a [`Vst3Loaded`] plus the scratch
-//! buffers needed for [`process`](Vst3Instance::process), and owns the
+//! Active processing state: a [`Vst3Loaded`] with scratch buffers and the
 //! `setActive(1)` + `setProcessing(1)` lifecycle.
 //!
 //! All non-processing methods (parameters, editor, state, latency) are
@@ -83,17 +82,22 @@ struct AudioIO {
     output_events: vst3::ComWrapper<EventList>,
 }
 
-/// Fully-active VST3 plugin ready to `process()` audio. Embeds a
-/// [`Vst3Loaded`] — all parameter, editor, state, and metadata methods are
-/// available via [`Deref`].
+/// Fully-active VST3 plugin ready to process audio.
+///
+/// Embeds a [`Vst3Loaded`]; all parameter, editor, state, and metadata methods
+/// are inherited via [`Deref`]. Obtain via [`Vst3Instance::load`] or
+/// [`Vst3Loaded::activate`], and drop back to a non-processing
+/// [`Vst3Loaded`] with [`Vst3Instance::deactivate`].
 pub struct Vst3Instance {
     loaded: Vst3Loaded,
     audio: AudioIO,
 }
 
 impl Vst3Instance {
-    /// Lightweight probe: load library, read factory and bus metadata, return
-    /// without calling init() or setActive(). Safe for plugins with license dialogs.
+    /// Lightweight metadata read: load the library, read factory and bus info,
+    /// return without calling `initialize()` or `setActive()`. Safe for plugins
+    /// that would otherwise pop license dialogs or hit the network during full
+    /// load.
     pub fn probe(path: &Path) -> Result<PluginInfo> {
         Vst3Loaded::probe(path)
     }
@@ -102,6 +106,13 @@ impl Vst3Instance {
     ///
     /// For GUI-only hosting, prefer [`Vst3Loaded::load`] — it skips the
     /// `setActive(1) + setProcessing(1)` cost.
+    ///
+    /// # Errors
+    ///
+    /// See [`Vst3Loaded::load`] for load-time errors, plus
+    /// [`Vst3Error::PluginError`](crate::Vst3Error::PluginError) with
+    /// [`LoadStage::Setup`] or [`LoadStage::Activation`] if the plugin rejects
+    /// the requested sample rate / block size or refuses to activate.
     pub fn load(path: &Path, sample_rate: f64, block_size: usize) -> Result<Self> {
         let loaded = Vst3Loaded::load_with_info(path)?;
         Self::from_loaded(loaded, sample_rate, block_size)
@@ -138,7 +149,7 @@ impl Vst3Instance {
         Ok(instance)
     }
 
-    /// Leave the active state, returning to [`Vst3Loaded`]. Reverses
+    /// Drop back to the non-processing [`Vst3Loaded`] state, reversing
     /// `setProcessing(1)` + `setActive(1)`.
     pub fn deactivate(mut self) -> Vst3Loaded {
         self.stop_processing();
@@ -151,36 +162,49 @@ impl Vst3Instance {
         loaded
     }
 
-    // ── configuration (re-runs setupProcessing) ──
-
+    /// Sample rate in Hz that was applied to `setupProcessing`.
     pub fn sample_rate(&self) -> f64 {
         self.audio.sample_rate
     }
 
+    /// Change the sample rate and re-run `setupProcessing`. Must be called
+    /// only when not inside [`process`](Self::process).
     pub fn set_sample_rate(&mut self, rate: f64) -> &mut Self {
         self.audio.sample_rate = rate;
         let _ = self.apply_process_setup();
         self
     }
 
+    /// Maximum block size (samples per channel) that was applied to
+    /// `setupProcessing`.
     pub fn block_size(&self) -> usize {
         self.audio.block_size
     }
 
+    /// Change the maximum block size and re-run `setupProcessing`. Must be
+    /// called only when not inside [`process`](Self::process).
     pub fn set_block_size(&mut self, size: usize) -> &mut Self {
         self.audio.block_size = size;
         let _ = self.apply_process_setup();
         self
     }
 
+    /// Input channels the plugin will read on bus 0.
     pub fn num_input_channels(&self) -> usize {
         self.audio.num_input_channels
     }
 
+    /// Output channels the plugin will write on bus 0.
     pub fn num_output_channels(&self) -> usize {
         self.audio.num_output_channels
     }
 
+    /// Enable or disable 64-bit float processing. Re-runs `setupProcessing`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Vst3Error::NotSupported`] if `use_f64` is `true` but the
+    /// plugin advertised no 64-bit support.
     pub fn set_use_f64(&mut self, use_f64: bool) -> Result<&mut Self> {
         if use_f64 && !self.loaded.info.supports_f64 {
             return Err(Vst3Error::NotSupported(
@@ -192,8 +216,17 @@ impl Vst3Instance {
         Ok(self)
     }
 
-    // ── processing ──
-
+    /// Run one realtime processing block.
+    ///
+    /// `midi_events` and `note_expressions` are staged into the plugin's input
+    /// event list (sorted by `sample_offset`). `param_changes` is forwarded as
+    /// `inputParameterChanges`; `transport` populates `ProcessContext`. The
+    /// returned [`ProcessOutput`] carries any MIDI / parameter-change events
+    /// the plugin emitted.
+    ///
+    /// Falls back to an empty output if the sample type is incompatible with
+    /// the plugin, if `buffer.num_samples == 0`, or if the plugin returns a
+    /// non-OK `tresult` (in which case `buffer.outputs` is also cleared).
     pub fn process<T: Sample>(
         &mut self,
         buffer: &mut AudioBuffer<T>,
@@ -289,8 +322,6 @@ impl Vst3Instance {
         }
     }
 
-    // ── internal ──
-
     fn apply_process_setup(&mut self) -> Result<()> {
         let symbolic_sample_size = if self.audio.use_f64 {
             crate::types::K_SAMPLE_64_INT
@@ -326,7 +357,8 @@ impl Vst3Instance {
                 component.activateBus(K_AUDIO, K_OUTPUT, i, 1);
             }
 
-            // Re-sync channel counts after bus activation.
+            // Re-sync channel counts after bus activation — some plugins only
+            // finalise their bus arrangement once activated.
             if let Some(ch) = get_bus_channel_count(component, K_INPUT, 0) {
                 if ch != self.audio.num_input_channels {
                     self.audio.num_input_channels = ch;

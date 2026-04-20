@@ -23,16 +23,35 @@ use crate::helpers::utf16_to_string;
 pub use super::progress::ProgressEvent;
 pub use super::unit_handler::UnitEvent;
 
+/// Notifications the plugin's editor pushes through `IComponentHandler` and
+/// its v2/v3/bus-activation extensions, delivered via
+/// [`Vst3Loaded::param_event_receiver`](crate::Vst3Loaded::param_event_receiver).
+///
+/// Typical usage: a user drags a knob in the plugin UI → the plugin calls
+/// `beginEdit` / `performEdit` / `endEdit` → the host receives the matching
+/// [`ParameterEditEvent`]s and updates its own automation state.
 #[derive(Debug, Clone)]
 pub enum ParameterEditEvent {
+    /// Plugin is about to start editing the parameter (mouse-down on a knob).
     BeginEdit(u32),
+    /// Plugin is reporting a new normalized (0.0 – 1.0) value for the
+    /// parameter.
     PerformEdit { param_id: u32, value: f64 },
+    /// Plugin has finished editing the parameter (mouse-up).
     EndEdit(u32),
+    /// Plugin requests that the host restart the component with the given
+    /// `RestartFlags` bitmask (e.g. reload parameter values, re-scan IO).
     RestartComponent(i32),
+    /// Plugin has marked itself dirty — the host should treat project state
+    /// as modified.
     SetDirty(bool),
+    /// Plugin requests the host open its editor (e.g. from a context menu).
     RequestOpenEditor,
+    /// Plugin signals the start of a coalescable group of edits.
     StartGroupEdit,
+    /// Plugin signals the end of a coalescable group of edits.
     FinishGroupEdit,
+    /// Plugin requests that a bus be activated or deactivated.
     RequestBusActivation {
         media_type: i32,
         direction: i32,

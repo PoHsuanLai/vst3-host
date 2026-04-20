@@ -1,5 +1,6 @@
-//! IUnitHandler (v1/v2) standalone COM implementation — ComponentHandler
-//! implements these too; this is used only by the unit test harness.
+//! Standalone `IUnitHandler` (v1/v2) COM implementation. [`ComponentHandler`]
+//! implements these interfaces too; this handler is used only by the
+//! unit-test harness.
 
 use crossbeam_channel::{Receiver, Sender};
 use vst3::{Class, ComWrapper};
@@ -10,10 +11,15 @@ use vst3::Steinberg::{
     },
 };
 
+/// Unit / program-list change notifications from the plugin. Delivered via
+/// [`Vst3Loaded::unit_event_receiver`](crate::Vst3Loaded::unit_event_receiver).
 #[derive(Debug, Clone)]
 pub enum UnitEvent {
+    /// Plugin has selected a different unit (preset category / voice).
     UnitSelected(i32),
+    /// A program list has changed its selected program.
     ProgramListChanged { list_id: i32, program_index: i32 },
+    /// The unit ↔ bus mapping has changed (IUnitHandler2).
     UnitByBusChanged,
 }
 

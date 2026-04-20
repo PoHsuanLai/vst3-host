@@ -1,5 +1,5 @@
-//! IProgress COM implementation — standalone form (ComponentHandler also
-//! implements IProgress; this is used only by the unit test harness).
+//! Standalone `IProgress` COM implementation. [`ComponentHandler`] also
+//! exposes `IProgress`; this handler is used only by the unit-test harness.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -14,15 +14,22 @@ use vst3::Steinberg::{
 
 use crate::helpers::utf16_to_string;
 
+/// Long-running progress notifications emitted by plugins (sample loading,
+/// offline rendering, etc.). Delivered via
+/// [`Vst3Loaded::progress_event_receiver`](crate::Vst3Loaded::progress_event_receiver).
 #[derive(Debug, Clone)]
 pub enum ProgressEvent {
+    /// A new progress operation has begun. `id` uniquely identifies this
+    /// operation across its lifetime; `progress_type` is the raw VST3
+    /// `ProgressType` value; `description` is a human-readable label.
     Started {
         id: u64,
         progress_type: u32,
         description: String,
     },
-    /// 0.0 to 1.0.
+    /// Progress update, normalized to `0.0..=1.0`.
     Updated { id: u64, progress: f64 },
+    /// The operation with this id has finished.
     Finished { id: u64 },
 }
 

@@ -1,71 +1,101 @@
-//! MIDI event types for VST3 plugin processing.
+//! VST3 event types and bidirectional conversion to/from the Tutti
+//! [`tutti_midi::MidiEvent`] UMP representation.
 //!
-//! VST3's native event list is richer than raw MIDI-1 wire (typed
-//! note-on/off/poly-pressure structs with f32 velocity plus generic `Data`
-//! events for CC/ProgramChange/ChannelPressure/PitchBend). These helpers
-//! bridge it to the workspace's canonical [`tutti_midi::MidiEvent`] UMP
-//! type: one `MidiEvent` → one `Vst3Event`, round-trippable.
+//! VST3's native event list is richer than raw MIDI-1 wire data (typed
+//! note-on/off/poly-pressure structs with `f32` velocity plus generic
+//! `Data` events for CC / ProgramChange / ChannelPressure / PitchBend). The
+//! [`vst3_event_from_midi`] / [`vst3_to_midi_event`] helpers bridge it to the
+//! workspace's canonical [`MidiEvent`] UMP type — one `MidiEvent` maps to one
+//! [`Vst3Event`] and round-trips losslessly for the MIDI-representable
+//! variants.
 
 pub use tutti_midi::MidiEvent;
 
 use vst3::Steinberg::Vst::Event_::EventTypes_;
 
+/// `type_` discriminant for note-on events.
 pub const K_NOTE_ON_EVENT: u16 = EventTypes_::kNoteOnEvent as u16;
+/// `type_` discriminant for note-off events.
 pub const K_NOTE_OFF_EVENT: u16 = EventTypes_::kNoteOffEvent as u16;
+/// `type_` discriminant for raw-data events (CC, pitch bend, program change, …).
 pub const K_DATA_EVENT: u16 = EventTypes_::kDataEvent as u16;
+/// `type_` discriminant for poly-pressure events.
 pub const K_POLY_PRESSURE_EVENT: u16 = EventTypes_::kPolyPressureEvent as u16;
+/// `type_` discriminant for note-expression value events.
 pub const K_NOTE_EXPRESSION_VALUE_EVENT: u16 = EventTypes_::kNoteExpressionValueEvent as u16;
 
-/// Flat Rust-facing header — merges the `busIndex/sampleOffset/ppqPosition/flags/type_`
-/// fields of `vst3::Steinberg::Vst::Event` so callers can construct events literally.
+/// Flat Rust-facing header merging the `busIndex` / `sampleOffset` /
+/// `ppqPosition` / `flags` / `type_` fields of `vst3::Steinberg::Vst::Event`
+/// so callers can construct events literally.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EventHeader {
+    /// Event bus index (0 for typical single-bus plugins).
     pub bus_index: i32,
+    /// Frame offset within the current processing block.
     pub sample_offset: i32,
+    /// Musical position in quarter notes, or 0 if unknown.
     pub ppq_position: f64,
+    /// Flags bitfield (see VST3 `EventFlags`).
     pub flags: u16,
+    /// One of the `K_*_EVENT` discriminants.
     pub event_type: u16,
 }
 
+/// Note-on event. Velocity is normalized to `0.0..=1.0`.
 #[derive(Debug, Clone, Copy)]
 pub struct NoteOnEvent {
     pub header: EventHeader,
     pub channel: i16,
     pub pitch: i16,
+    /// Fractional tuning offset from 12-TET, in semitones.
     pub tuning: f32,
+    /// Normalized velocity (0.0 – 1.0).
     pub velocity: f32,
+    /// Note length in samples; 0 if unknown.
     pub length: i32,
+    /// Plugin-assigned note id, or `-1` if channel/pitch-based.
     pub note_id: i32,
 }
 
+/// Note-off event. Velocity is normalized to `0.0..=1.0`.
 #[derive(Debug, Clone, Copy)]
 pub struct NoteOffEvent {
     pub header: EventHeader,
     pub channel: i16,
     pub pitch: i16,
+    /// Normalized release velocity (0.0 – 1.0).
     pub velocity: f32,
+    /// Plugin-assigned note id matching the originating note-on, or `-1`.
     pub note_id: i32,
     pub tuning: f32,
 }
 
+/// Generic raw-bytes event — used by VST3 for CC, pitch bend, program change,
+/// channel pressure, and SysEx.
 #[derive(Debug, Clone, Copy)]
 pub struct DataEvent {
     pub header: EventHeader,
+    /// Valid byte count in `bytes`.
     pub size: u32,
+    /// Data subtype (e.g. `DataEvent::DataTypes::kMidiSysEx`).
     pub event_type: u32,
-    /// Only the first `size` bytes are valid.
+    /// Inline payload. Only the first `size` bytes are valid.
     pub bytes: [u8; 16],
 }
 
+/// Polyphonic pressure (per-note aftertouch).
 #[derive(Debug, Clone, Copy)]
 pub struct PolyPressureEvent {
     pub header: EventHeader,
     pub channel: i16,
     pub pitch: i16,
+    /// Normalized pressure (0.0 – 1.0).
     pub pressure: f32,
     pub note_id: i32,
 }
 
+/// Per-note expression value. Specific to a note id and expression type
+/// rather than a channel.
 #[derive(Debug, Clone, Copy)]
 pub struct NoteExpressionValueEvent {
     pub header: EventHeader,
@@ -76,6 +106,9 @@ pub struct NoteExpressionValueEvent {
     pub value: f64,
 }
 
+/// Safe tagged-enum form of the VST3 `Event` union. See
+/// [`vst3_event_from_midi`] / [`vst3_to_midi_event`] for round-trip MIDI
+/// conversion.
 #[derive(Debug, Clone, Copy)]
 pub enum Vst3Event {
     NoteOn(NoteOnEvent),
@@ -86,6 +119,8 @@ pub enum Vst3Event {
 }
 
 impl Vst3Event {
+    /// Frame offset within the current processing block, from the underlying
+    /// [`EventHeader`].
     pub fn sample_offset(&self) -> i32 {
         match self {
             Vst3Event::NoteOn(e) => e.header.sample_offset,
@@ -247,7 +282,12 @@ pub(crate) unsafe fn from_c_event(event: &vst3::Steinberg::Vst::Event) -> Option
     }
 }
 
-/// Build a [`Vst3Event`] from a Tutti UMP [`MidiEvent`].
+/// Encode a Tutti UMP [`MidiEvent`] as a [`Vst3Event`].
+///
+/// Note-on/off and poly-pressure land in their typed VST3 variants; all other
+/// MIDI messages (CC, pitch bend, program change, channel pressure) fall
+/// through to [`Vst3Event::Data`]. Returns `None` for MIDI 2.0 events that
+/// can't be flattened to 3 MIDI-1 bytes.
 pub fn vst3_event_from_midi(event: &MidiEvent) -> Option<Vst3Event> {
     let (bytes, _len) = event.to_midi1_bytes()?;
     let sample_offset = event.frame_offset as i32;
@@ -313,7 +353,10 @@ pub fn vst3_event_from_midi(event: &MidiEvent) -> Option<Vst3Event> {
     }
 }
 
-/// Convert a [`Vst3Event`] back to a Tutti UMP [`MidiEvent`].
+/// Decode a [`Vst3Event`] into a Tutti UMP [`MidiEvent`].
+///
+/// Returns `None` for [`Vst3Event::NoteExpression`] (not representable as
+/// MIDI) and for [`Vst3Event::Data`] payloads shorter than 2 bytes.
 pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
     match event {
         Vst3Event::NoteOn(e) => {
@@ -345,6 +388,8 @@ pub fn vst3_to_midi_event(event: &Vst3Event) -> Option<MidiEvent> {
     }
 }
 
+/// VST3-standard note-expression dimensions carried on
+/// [`NoteExpressionValueEvent`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteExpressionType {
     /// Volume expression (0.0 = -inf dB, 0.5 = 0dB, 1.0 = +6dB).
@@ -360,6 +405,7 @@ pub enum NoteExpressionType {
 }
 
 impl NoteExpressionType {
+    /// Encode as the integer `typeId` VST3 uses on the wire.
     pub fn to_type_id(self) -> u32 {
         match self {
             NoteExpressionType::Volume => 0,
@@ -370,6 +416,7 @@ impl NoteExpressionType {
         }
     }
 
+    /// Decode a VST3 `typeId` back to an enum value; `None` for unknown ids.
     pub fn from_type_id(id: u32) -> Option<Self> {
         match id {
             0 => Some(NoteExpressionType::Volume),
@@ -382,16 +429,23 @@ impl NoteExpressionType {
     }
 }
 
+/// Host-facing note-expression sample. Paired with a note id so the plugin
+/// applies it to a specific active voice.
 #[derive(Debug, Clone, Copy)]
 pub struct NoteExpressionValue {
+    /// Frame offset within the current processing block.
     pub sample_offset: i32,
+    /// Note id returned by the originating note-on.
     pub note_id: i32,
+    /// Which expression dimension this sample drives.
     pub expression_type: NoteExpressionType,
     /// 0.0 to 1.0
     pub value: f64,
 }
 
 impl NoteExpressionValue {
+    /// Convert to the tagged-enum [`Vst3Event`] form accepted by the event
+    /// list staging code.
     pub fn to_vst3_event(&self) -> Vst3Event {
         let header = EventHeader {
             bus_index: 0,
@@ -410,6 +464,8 @@ impl NoteExpressionValue {
     }
 }
 
+/// Extract a [`NoteExpressionValue`] from a [`Vst3Event`], or `None` for any
+/// non-expression variant or unrecognised `type_id`.
 pub fn vst3_to_note_expression(event: &Vst3Event) -> Option<NoteExpressionValue> {
     match event {
         Vst3Event::NoteExpression(e) => {

@@ -1,8 +1,9 @@
 //! Host-side COM interface implementations for VST3 hosting.
 //!
-//! Every type here is `pub(crate)` from the consumer's perspective: callers
-//! reach the COM objects through `ComWrapper<T>` and `ComPtr<IFoo>` from
-//! the `vst3` crate.
+//! Every type here is reachable from the consumer's perspective only through
+//! re-exports at the crate root (notably [`ParameterEditEvent`],
+//! [`ProgressEvent`], [`UnitEvent`]). Internally each type lives behind a
+//! `ComWrapper<T>` so plugins see the standard `IFoo` vtables.
 
 mod attr_list;
 mod component_handler;

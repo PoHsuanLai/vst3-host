@@ -1,4 +1,14 @@
-//! Rust library for hosting VST3 audio plugins via their COM interfaces.
+//! Type-safe Rust library for hosting VST3 audio plugins via their native COM
+//! interfaces.
+//!
+//! The public surface is organised around a three-stage lifecycle encoded in the
+//! type system: a [`Vst3Library`] holds the loaded DSO and factory, a
+//! [`Vst3Loaded`] is a `initialize()`'d plugin suitable for GUI/parameter work,
+//! and a [`Vst3Instance`] adds the activation state required for
+//! [`Vst3Instance::process`]. Transitions between stages move ownership, so the
+//! compiler rejects calls that would be invalid for the current state.
+//!
+//! See the crate's `README.md` for a worked example.
 
 #[allow(dead_code)]
 pub(crate) mod com;
@@ -19,9 +29,12 @@ pub use types::{
 pub use com::{ParameterEditEvent, ProgressEvent, UnitEvent};
 
 /// Tagged-enum wrappers over VST3's typed event structs, plus the event-type
-/// discriminant constants. Referenced from
-/// [`vst3_to_midi_event`] / [`vst3_event_from_midi`] and from downstream
-/// crates that need to construct `NoteOnEvent`/`NoteOffEvent`/etc. literally.
+/// discriminant constants.
+///
+/// Re-exported here so downstream crates that need to construct
+/// `NoteOnEvent`/`NoteOffEvent`/etc. literally (rather than going through the
+/// [`vst3_to_midi_event`] / [`vst3_event_from_midi`] helpers) can do so without
+/// depending on the raw `vst3` crate.
 pub mod events {
     pub use crate::types::{
         DataEvent, EventHeader, NoteExpressionValueEvent, NoteOffEvent, NoteOnEvent,

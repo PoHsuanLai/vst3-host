@@ -42,8 +42,6 @@ use super::library::Vst3Library;
 
 const DEFAULT_EDITOR_SIZE: (u32, u32) = (800, 600);
 
-// Re-express the handful of int-constant references we use in plugin API calls
-// as `i32` for `media_type`/`direction` arguments.
 pub(super) const K_AUDIO: i32 = kAudio as i32;
 pub(super) const K_INPUT: i32 = kInput as i32;
 pub(super) const K_OUTPUT: i32 = kOutput as i32;
@@ -88,8 +86,9 @@ pub(super) struct PluginInterfaces {
 unsafe impl Send for PluginInterfaces {}
 unsafe impl Sync for PluginInterfaces {}
 
-/// The editor controller. Three states — encodes the invariant that
-/// "separate controller" plugins always have a controller.
+/// Three-way split encoding the controller invariant: either the component is
+/// also the controller (`Same`), the controller is a distinct COM object
+/// (`Separate`), or the plugin has no controller at all (`None`).
 pub(super) enum Controller {
     /// Component and controller are the same COM object (common single-component
     /// plugins). No extra `initialize()`/connection wiring needed.
@@ -128,8 +127,8 @@ pub(super) enum EditorState {
 unsafe impl Send for EditorState {}
 unsafe impl Sync for EditorState {}
 
-/// Plugin instance that has been `initialize()`'d and has usable parameter /
-/// editor / state surfaces, but is **not** processing audio.
+/// Plugin instance that has been `initialize()`'d and has usable parameter,
+/// editor, and state surfaces, but is **not** processing audio.
 ///
 /// Transition to [`Vst3Instance`] via [`Vst3Loaded::activate`] to enable
 /// `process()`. For GUI-only hosting (no audio ever), stay here — skip the
@@ -144,8 +143,10 @@ pub struct Vst3Loaded {
 }
 
 impl Vst3Loaded {
-    /// Lightweight probe: load library, read factory and bus metadata, return
-    /// without calling init() or setActive(). Safe for plugins with license dialogs.
+    /// Lightweight metadata read: load the library, read factory and bus info,
+    /// return without calling `initialize()` or `setActive()`. Safe for plugins
+    /// that would otherwise pop license dialogs or hit the network during full
+    /// load.
     pub fn probe(path: &Path) -> Result<PluginInfo> {
         check_exists(path)?;
         let library = Vst3Library::load(path)?;
@@ -157,9 +158,17 @@ impl Vst3Loaded {
         Ok(build_plugin_info_raw(&library, &component, processor.as_ref(), &class))
     }
 
-    /// Load a VST3 plugin for GUI/editor use only — no audio processing will
-    /// ever happen on the returned value. Stays in `Loaded` state, skipping
+    /// Load a VST3 plugin for GUI / parameter work only — no audio processing
+    /// will ever happen on the returned value. Stays in `Loaded` state, skipping
     /// the activation cost.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Vst3Error::LoadFailed`](crate::Vst3Error::LoadFailed) if the
+    /// file is missing, the DSO can't be opened, the factory is empty, or no
+    /// audio class is found; returns
+    /// [`Vst3Error::PluginError`](crate::Vst3Error::PluginError) if
+    /// `IPluginBase::initialize` fails.
     pub fn load(path: &Path) -> Result<Self> {
         Self::load_with_info(path)
     }
@@ -228,22 +237,23 @@ impl Vst3Loaded {
         Vst3Instance::from_loaded(self, sample_rate, block_size)
     }
 
-    // ── read-only metadata ──
-
+    /// Metadata snapshot (id, name, vendor, bus counts, MIDI and f64 support).
     pub fn info(&self) -> &PluginInfo {
         &self.info
     }
 
+    /// True if the plugin advertises 64-bit float processing support.
     pub fn supports_f64(&self) -> bool {
         self.info.supports_f64
     }
 
+    /// Processing latency reported by the plugin, in samples.
     pub fn get_latency_samples(&self) -> u32 {
         unsafe { self.interfaces.processor.getLatencySamples() }
     }
 
-    // ── parameters ──
-
+    /// Number of automatable parameters exposed by the edit controller.
+    /// Returns `0` if the plugin has no controller.
     pub fn parameter_count(&self) -> u32 {
         match self.interfaces.controller.as_ref() {
             Some(c) => unsafe { c.getParameterCount() as u32 },
@@ -251,6 +261,8 @@ impl Vst3Loaded {
         }
     }
 
+    /// Read the normalized (0.0 – 1.0) value of the parameter at `index`.
+    /// Returns `0.0` if the plugin has no controller.
     pub fn parameter(&self, index: u32) -> f64 {
         match self.interfaces.controller.as_ref() {
             Some(c) => unsafe { c.getParamNormalized(index) },
@@ -258,6 +270,8 @@ impl Vst3Loaded {
         }
     }
 
+    /// Write a normalized (0.0 – 1.0) `value` to the parameter at `index`.
+    /// No-op if the plugin has no controller.
     pub fn set_parameter(&mut self, index: u32, value: f64) -> &mut Self {
         if let Some(c) = self.interfaces.controller.as_ref() {
             unsafe {
@@ -267,6 +281,9 @@ impl Vst3Loaded {
         self
     }
 
+    /// Descriptor for the parameter at `index` (title, units, flags, default).
+    /// Returns `None` if the index is out of range or the plugin has no
+    /// controller.
     pub fn parameter_info(&self, index: u32) -> Option<Vst3ParameterInfo> {
         let controller = self.interfaces.controller.as_ref()?;
         let mut raw: vst3::Steinberg::Vst::ParameterInfo = unsafe { std::mem::zeroed() };
@@ -274,34 +291,48 @@ impl Vst3Loaded {
         (result == kResultOk).then(|| Vst3ParameterInfo::from_c(&raw))
     }
 
-    // ── event receivers ──
-
+    /// Receiver for parameter-edit notifications emitted by the plugin's
+    /// editor (`beginEdit`/`performEdit`/`endEdit`, restart requests, etc.).
     pub fn param_event_receiver(&self) -> &Receiver<ParameterEditEvent> {
         &self.host.param_event_rx
     }
 
+    /// Drain all currently-queued parameter-edit events without blocking.
     pub fn poll_param_events(&self) -> Vec<ParameterEditEvent> {
         self.host.param_event_rx.try_iter().collect()
     }
 
+    /// Receiver for plugin-reported progress events (long operations such as
+    /// sample loading).
     pub fn progress_event_receiver(&self) -> &Receiver<ProgressEvent> {
         &self.host.progress_event_rx
     }
 
+    /// Drain all currently-queued progress events without blocking.
     pub fn poll_progress_events(&self) -> Vec<ProgressEvent> {
         self.host.progress_event_rx.try_iter().collect()
     }
 
+    /// Receiver for unit / program-list change events.
     pub fn unit_event_receiver(&self) -> &Receiver<UnitEvent> {
         &self.host.unit_event_rx
     }
 
+    /// Drain all currently-queued unit events without blocking.
     pub fn poll_unit_events(&self) -> Vec<UnitEvent> {
         self.host.unit_event_rx.try_iter().collect()
     }
 
-    // ── state ──
-
+    /// Capture the plugin's component state as an opaque byte blob suitable
+    /// for persisting and later feeding back to [`set_state`](Self::set_state).
+    ///
+    /// Falls back to a host-side parameter-dump encoding for plugins that
+    /// refuse `IComponent::getState`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Vst3Error::StateError`](crate::Vst3Error::StateError) if the
+    /// host-side `IBStream` wrapper cannot be created.
     pub fn state(&self) -> Result<Vec<u8>> {
         let stream = BStream::new();
         let stream_ptr = stream
@@ -328,6 +359,15 @@ impl Vst3Loaded {
         Ok(state)
     }
 
+    /// Restore plugin state from a blob produced by [`state`](Self::state).
+    /// Also pushes the blob through the controller's `setComponentState` so
+    /// both halves of a separate component/controller stay in sync.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Vst3Error::StateError`](crate::Vst3Error::StateError) for
+    /// empty or malformed data, or if the `IBStream` wrapper cannot be
+    /// created.
     pub fn set_state(&mut self, data: &[u8]) -> Result<&mut Self> {
         if data.is_empty() {
             return Err(Vst3Error::StateError("Empty state data".to_string()));
@@ -395,12 +435,22 @@ impl Vst3Loaded {
         Ok(self)
     }
 
-    // ── editor ──
-
+    /// True if the plugin exposes an editor controller. Not all plugins with a
+    /// controller have a UI, but a missing controller definitely means no UI.
     pub fn has_editor(&self) -> bool {
         self.interfaces.controller.as_ref().is_some()
     }
 
+    /// Create the plugin editor, attach it to `parent`, and return its initial
+    /// pixel size. Only one editor may be open at a time per instance —
+    /// opening a second replaces the first.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Vst3Error::NotSupported`](crate::Vst3Error::NotSupported) if
+    /// the plugin has no controller or refuses to create a view, and
+    /// [`Vst3Error::PluginError`](crate::Vst3Error::PluginError) if
+    /// `IPlugView::attached` fails.
     pub fn open_editor(&mut self, parent: WindowHandle) -> Result<EditorSize> {
         let ctrl = self.interfaces.controller.as_ref().ok_or(
             Vst3Error::NotSupported("Plugin has no editor controller".to_string()),
@@ -432,6 +482,8 @@ impl Vst3Loaded {
         Ok(EditorSize { width, height })
     }
 
+    /// Close the editor if open, calling `IPlugView::removed`. No-op otherwise.
+    /// Called automatically on `Drop`.
     pub fn close_editor(&mut self) -> &mut Self {
         if let EditorState::Open(view) =
             std::mem::replace(&mut self.editor, EditorState::Closed)
@@ -440,8 +492,6 @@ impl Vst3Loaded {
         }
         self
     }
-
-    // ── internal ──
 
     /// Wire the component's connection point to the separate controller's.
     /// No-op unless both ends expose `IConnectionPoint`.
@@ -541,8 +591,6 @@ impl Drop for Vst3Loaded {
         }
     }
 }
-
-// ── helpers ──
 
 fn check_exists(path: &Path) -> Result<()> {
     if !path.exists() {

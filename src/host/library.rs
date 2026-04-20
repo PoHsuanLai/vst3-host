@@ -25,6 +25,11 @@ fn guid_as_tuid(guid: &vst3::com_scrape_types::Guid) -> TUID {
     out
 }
 
+/// A loaded VST3 dynamic library with its `IPluginFactory` resolved.
+///
+/// Shared via [`Arc`] because a single bundle commonly exposes multiple plugin
+/// classes, and each [`Vst3Loaded`](crate::Vst3Loaded) instance keeps its
+/// originating library alive for the plugin's lifetime.
 pub struct Vst3Library {
     _library: Library,
     factory: ComPtr<IPluginFactory>,
@@ -34,7 +39,14 @@ unsafe impl Send for Vst3Library {}
 unsafe impl Sync for Vst3Library {}
 
 impl Vst3Library {
-    /// Load a VST3 library from a pre-resolved path to the actual binary.
+    /// Load a VST3 library from a pre-resolved path to the actual binary (the
+    /// inner Mach-O / ELF / PE, not the bundle directory).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Vst3Error::LoadFailed`] if the OS cannot open the library, if
+    /// the `GetPluginFactory` symbol is missing, or if the factory function
+    /// returns null.
     pub fn load(lib_path: &Path) -> Result<Arc<Self>> {
         let library = unsafe {
             Library::new(lib_path).map_err(|e| Vst3Error::LoadFailed {
@@ -69,6 +81,8 @@ impl Vst3Library {
         }))
     }
 
+    /// Vendor/URL/email from the factory. `None` if the plugin rejects the
+    /// `getFactoryInfo` call.
     pub fn get_factory_info(&self) -> Option<FactoryInfo> {
         let mut info: PFactoryInfo = unsafe { std::mem::zeroed() };
         let result = unsafe { self.factory.getFactoryInfo(&mut info) };
@@ -83,10 +97,17 @@ impl Vst3Library {
         }
     }
 
+    /// Number of plugin classes exposed by this factory (audio processors,
+    /// controllers, etc.). A single bundle may contain many.
     pub fn count_classes(&self) -> i32 {
         unsafe { self.factory.countClasses() }
     }
 
+    /// Read the `index`-th class descriptor from the factory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Vst3Error::PluginError`] if the factory rejects the index.
     pub fn get_class_info(&self, index: i32) -> Result<ClassInfo> {
         let mut info: PClassInfo = unsafe { std::mem::zeroed() };
         let result = unsafe { self.factory.getClassInfo(index, &mut info) };
@@ -131,18 +152,27 @@ impl Vst3Library {
     }
 }
 
+/// Vendor identification read from `IPluginFactory::getFactoryInfo`.
 #[derive(Debug, Clone)]
 pub struct FactoryInfo {
+    /// Vendor / company name.
     pub vendor: String,
+    /// Vendor's website.
     pub url: String,
+    /// Vendor contact email.
     pub email: String,
 }
 
+/// Descriptor for a single class (plugin variant) within a factory.
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
+    /// Steinberg-signed class id used to pass back to
+    /// `IPluginFactory::createInstance`.
     pub cid: TUID,
     /// Human-readable byte-order independent representation for formatting.
     pub cid_bytes: [u8; 16],
+    /// Category string, e.g. `"Audio Module Class"`, `"Controller Class"`.
     pub category: String,
+    /// Display name of the class.
     pub name: String,
 }
