@@ -219,4 +219,29 @@ mod tests {
             assert!((out.__field0.noteOn.velocity - 0.8).abs() < 1e-6);
         }
     }
+
+    /// RT regression: `update_from_midi` / `clear` run every buffer;
+    /// they must reuse the pre-reserved Vec capacity without heap grow.
+    #[test]
+    fn update_from_midi_is_allocation_free_after_warmup() {
+        let list = EventList::new();
+        let events = [
+            MidiEvent::note_on(0, 0, 60, 0x8000).with_frame_offset(0),
+            MidiEvent::note_off(0, 0, 60, 0).with_frame_offset(32),
+            MidiEvent::note_on(0, 1, 64, 0x6000).with_frame_offset(64),
+            MidiEvent::note_off(0, 1, 64, 0).with_frame_offset(96),
+        ];
+
+        // Warm up — the first call may grow (the default Vec cap is 256,
+        // so this shouldn't, but prime anyway).
+        list.update_from_midi(&events);
+        list.clear();
+
+        assert_no_alloc::assert_no_alloc(|| {
+            for _ in 0..10_000 {
+                list.update_from_midi(&events);
+                list.clear();
+            }
+        });
+    }
 }

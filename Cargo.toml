@@ -19,6 +19,7 @@ tutti-midi = { path = "../tutti-midi" }
 vst3 = "0.3"
 
 [dev-dependencies]
+assert_no_alloc = "1"
 tempfile = "3"
 winit = "0.30"
 raw-window-handle = "0.6"

@@ -43,3 +43,9 @@ pub mod events {
         K_NOTE_OFF_EVENT, K_NOTE_ON_EVENT, K_POLY_PRESSURE_EVENT,
     };
 }
+
+// Test-only global allocator for RT-safety regression tests. Panics on
+// any heap allocation inside `assert_no_alloc::assert_no_alloc(..)` scopes.
+#[cfg(test)]
+#[global_allocator]
+static RT_NO_ALLOC_HARNESS: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;

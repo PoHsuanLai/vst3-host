@@ -66,6 +66,7 @@ impl ParamValueQueueImpl {
         points.extend_from_slice(&queue.points);
     }
 
+
     pub fn to_queue(&self) -> ParameterQueue {
         let mut queue = ParameterQueue::new(self.param_id());
         for point in self.points.borrow().iter() {
@@ -132,5 +133,55 @@ impl IParamValueQueueTrait for ParamValueQueueImpl {
             *index = (points.len() - 1) as i32;
         }
         kResultOk
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue_with_points(count: usize) -> ParameterQueue {
+        let mut q = ParameterQueue::new(42);
+        for i in 0..count {
+            q.add_point(i as i32, i as f64 * 0.01);
+        }
+        q
+    }
+
+    /// RT regression: `refill_from_queue` must not allocate when the
+    /// inline SmallVec capacity (16) is sufficient. Covers the hot
+    /// automation path where a DAW streams per-buffer points.
+    #[test]
+    fn refill_from_queue_is_allocation_free() {
+        let queue = ParamValueQueueImpl::new_empty(0);
+        let source = queue_with_points(8);
+
+        // Warm up.
+        queue.refill_from_queue(&source);
+
+        assert_no_alloc::assert_no_alloc(|| {
+            for _ in 0..10_000 {
+                queue.refill_from_queue(&source);
+            }
+        });
+        assert_eq!(queue.len(), 8);
+    }
+
+    /// Refilling with more points than have been seen before grows
+    /// once; after that, subsequent refills at the same size reuse the
+    /// heap capacity. The no-alloc assertion covers the steady state.
+    #[test]
+    fn refill_from_queue_steady_state_is_allocation_free_after_grow() {
+        let queue = ParamValueQueueImpl::new_empty(0);
+        let big = queue_with_points(32); // > INLINE_POINTS
+        // Grow first (outside the no-alloc scope).
+        queue.refill_from_queue(&big);
+
+        assert_no_alloc::assert_no_alloc(|| {
+            for _ in 0..1_000 {
+                queue.refill_from_queue(&big);
+            }
+        });
+        assert_eq!(queue.len(), 32);
     }
 }
