@@ -46,6 +46,13 @@ pub struct EditorSize {
     pub height: u32,
 }
 
+/// Static capabilities of a VST3 plugin editor view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EditorCapabilities {
+    /// `IPlugView::canResize()` returned `kResultTrue`.
+    pub resizable: bool,
+}
+
 /// A platform-specific parent window handle for embedding plugin editors.
 ///
 /// Construct via [`WindowHandle::from_raw`], then pass to

@@ -14,6 +14,7 @@ mod host_application;
 mod message;
 mod param_changes;
 mod param_queue;
+mod plug_frame;
 mod progress;
 mod stream;
 mod unit_handler;
@@ -25,6 +26,7 @@ pub use component_handler::{ComponentHandler, ParameterEditEvent, ProgressEvent,
 pub use event_list::EventList;
 pub use host_application::HostApplication;
 pub use param_changes::ParameterChangesImpl;
+pub(crate) use plug_frame::HostPlugFrame;
 pub use stream::BStream;
 
 #[cfg(test)]

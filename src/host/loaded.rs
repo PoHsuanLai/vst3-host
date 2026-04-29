@@ -30,11 +30,13 @@ use vst3::Steinberg::kPlatformTypeNSView;
 use vst3::Steinberg::kPlatformTypeX11EmbedWindowID;
 
 use crate::com::{
-    BStream, ComponentHandler, HostApplication, ParameterEditEvent, ProgressEvent, UnitEvent,
+    BStream, ComponentHandler, HostApplication, HostPlugFrame, ParameterEditEvent, ProgressEvent,
+    UnitEvent,
 };
 use crate::error::{LoadStage, Result, Vst3Error};
 use crate::types::{
-    BusInfo as BusInfoWrap, EditorSize, PluginInfo, Vst3ParameterInfo, WindowHandle,
+    BusInfo as BusInfoWrap, EditorCapabilities, EditorSize, PluginInfo, Vst3ParameterInfo,
+    WindowHandle,
 };
 
 use super::instance::Vst3Instance;
@@ -140,6 +142,8 @@ pub struct Vst3Loaded {
     pub(super) host: HostContext,
     pub(super) editor: EditorState,
     pub(super) info: PluginInfo,
+    pub(super) plug_frame: ComWrapper<HostPlugFrame>,
+    pub(super) plug_frame_rx: Receiver<EditorSize>,
 }
 
 impl Vst3Loaded {
@@ -216,6 +220,7 @@ impl Vst3Loaded {
         let host_application = HostApplication::new("vst3-host");
         let (component_handler, param_event_rx, progress_event_rx, unit_event_rx) =
             ComponentHandler::new();
+        let (plug_frame, plug_frame_rx) = HostPlugFrame::new();
 
         Self {
             _library: library,
@@ -233,6 +238,8 @@ impl Vst3Loaded {
             },
             editor: EditorState::Closed,
             info,
+            plug_frame,
+            plug_frame_rx,
         }
     }
 
@@ -478,6 +485,16 @@ impl Vst3Loaded {
         #[cfg(target_os = "linux")]
         let platform_type = kPlatformTypeX11EmbedWindowID;
 
+        // setFrame must precede attached() per Steinberg spec.
+        let frame_ptr = self
+            .plug_frame
+            .as_com_ref::<vst3::Steinberg::IPlugFrame>()
+            .map(|r| r.as_ptr())
+            .unwrap_or(std::ptr::null_mut());
+        unsafe {
+            let _ = view.setFrame(frame_ptr);
+        }
+
         let result = unsafe { view.attached(parent.as_ptr(), platform_type) };
         if result != kResultOk {
             return Err(Vst3Error::PluginError {
@@ -501,6 +518,55 @@ impl Vst3Loaded {
             }
         }
         self
+    }
+
+    pub fn editor_capabilities(&self) -> EditorCapabilities {
+        let EditorState::Open(view) = &self.editor else {
+            return EditorCapabilities::default();
+        };
+        let resizable = unsafe { view.canResize() } == kResultOk;
+        EditorCapabilities { resizable }
+    }
+
+    /// Coalesces multiple `IPlugFrame::resizeView` requests received
+    /// since the last poll, returning only the latest.
+    pub fn poll_editor_resize_request(&mut self) -> Option<EditorSize> {
+        if !matches!(self.editor, EditorState::Open(_)) {
+            return None;
+        }
+        let mut latest = None;
+        while let Ok(size) = self.plug_frame_rx.try_recv() {
+            latest = Some(size);
+        }
+        latest
+    }
+
+    /// Returns the snapped size the plugin applied.
+    pub fn resize_editor(&mut self, requested: EditorSize) -> Result<EditorSize> {
+        let EditorState::Open(view) = &self.editor else {
+            return Err(Vst3Error::NotSupported("editor not open".to_string()));
+        };
+        let mut rect = ViewRect {
+            left: 0,
+            top: 0,
+            right: requested.width as i32,
+            bottom: requested.height as i32,
+        };
+        unsafe {
+            // checkSizeConstraint may return kResultFalse (no snap) — not an error.
+            let _ = view.checkSizeConstraint(&mut rect);
+            let res = view.onSize(&mut rect);
+            if res != kResultOk {
+                return Err(Vst3Error::PluginError {
+                    stage: LoadStage::Initialization,
+                    code: res,
+                });
+            }
+        }
+        Ok(EditorSize {
+            width: (rect.right - rect.left) as u32,
+            height: (rect.bottom - rect.top) as u32,
+        })
     }
 
     /// Wire the component's connection point to the separate controller's.

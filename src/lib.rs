@@ -21,10 +21,10 @@ pub mod types;
 pub use error::{LoadStage, Result, Vst3Error};
 pub use host::{Vst3Instance, Vst3Library, Vst3Loaded};
 pub use types::{
-    parameter_flags, vst3_event_from_midi, vst3_to_midi_event, AudioBuffer, BusInfo, EditorSize,
-    MidiEvent, NoteExpressionType, NoteExpressionValue, ParameterChanges, ParameterPoint,
-    ParameterQueue, PluginInfo, ProcessOutput, Sample, TransportState, Vst3ParameterInfo,
-    WindowHandle,
+    parameter_flags, vst3_event_from_midi, vst3_to_midi_event, AudioBuffer, BusInfo,
+    EditorCapabilities, EditorSize, MidiEvent, NoteExpressionType, NoteExpressionValue,
+    ParameterChanges, ParameterPoint, ParameterQueue, PluginInfo, ProcessOutput, Sample,
+    TransportState, Vst3ParameterInfo, WindowHandle,
 };
 
 pub use com::{ParameterEditEvent, ProgressEvent, UnitEvent};
