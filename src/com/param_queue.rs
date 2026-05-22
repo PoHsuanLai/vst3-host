@@ -61,7 +61,7 @@ impl ParamValueQueueImpl {
     /// 16, or whatever the current heap capacity is after prior reuse).
     pub fn refill_from_queue(&self, queue: &ParameterQueue) {
         *self.param_id.borrow_mut() = queue.param_id;
-        let points = self.points.borrow_mut();
+        let mut points = self.points.borrow_mut();
         points.clear();
         points.extend_from_slice(&queue.points);
     }
@@ -118,7 +118,7 @@ impl IParamValueQueueTrait for ParamValueQueueImpl {
     }
 
     unsafe fn addPoint(&self, sample_offset: i32, value: f64, index: *mut i32) -> tresult {
-        let points = self.points.borrow_mut();
+        let mut points = self.points.borrow_mut();
         points.push(ParameterPoint {
             sample_offset,
             value,

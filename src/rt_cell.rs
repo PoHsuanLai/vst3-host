@@ -1,4 +1,4 @@
-//! Interior-mutability cell for single-thread (audio-thread) access.
+//! Interior-mutability cell for audio-thread-only access.
 //!
 //! VST3's COM-object contract guarantees that the host and plugin only
 //! touch a given parameter / event object during
@@ -9,32 +9,35 @@
 //! no contention.
 //!
 //! [`AudioThreadCell<T>`] is that wrapper. In release builds it compiles
-//! to the bare `UnsafeCell`; in debug builds it asserts that every
-//! access comes from the same thread that first touched the cell, so a
-//! stray call from the UI thread panics immediately instead of silently
-//! racing.
+//! to the bare `UnsafeCell`; in debug builds it asserts that no second
+//! borrow is live on a *different* thread, so a stray call from the UI
+//! thread panics immediately instead of silently racing. Sequential
+//! access from different threads (e.g. OS audio stacks that migrate the
+//! callback between invocations, notably CoreAudio on macOS) is allowed
+//! — the contract is "one borrow at a time", not "always the same
+//! thread".
 //!
 //! # Safety contract
 //!
-//! Every public method requires that the caller be on a single thread
-//! for the lifetime of the cell. `Send` moves across threads are fine
-//! (the whole [`Vst3Instance`](crate::Vst3Instance) is `Send`); what
-//! must not happen is two threads dereferencing the same cell
-//! concurrently. See the module docs of
-//! [`com::param_queue`](crate::com::param_queue),
+//! Every public method requires that at any instant at most one borrow
+//! of the cell is live. `Send` moves across threads are fine (the whole
+//! [`Vst3Instance`](crate::Vst3Instance) is `Send`); what must not
+//! happen is two threads dereferencing the same cell concurrently. See
+//! the module docs of [`com::param_queue`](crate::com::param_queue),
 //! [`com::param_changes`](crate::com::param_changes), and
 //! [`com::event_list`](crate::com::event_list) for the precise
 //! discipline each COM object relies on.
 
 use std::cell::UnsafeCell;
+use std::ops::{Deref, DerefMut};
 #[cfg(debug_assertions)]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct AudioThreadCell<T> {
     inner: UnsafeCell<T>,
-    /// Thread that first borrowed the cell. 0 = unset. Debug-only.
+    /// Set while a borrow guard is live. Debug-only.
     #[cfg(debug_assertions)]
-    owner: AtomicU64,
+    in_use: AtomicBool,
 }
 
 impl<T> AudioThreadCell<T> {
@@ -42,72 +45,116 @@ impl<T> AudioThreadCell<T> {
         Self {
             inner: UnsafeCell::new(val),
             #[cfg(debug_assertions)]
-            owner: AtomicU64::new(0),
+            in_use: AtomicBool::new(false),
         }
     }
 
-    /// Clears the owner so the next access can come from a new thread.
-    /// Used when the audio stream is torn down and a fresh thread will
-    /// drive the next `process` loop.
-    pub fn reset_owner(&self) {
-        #[cfg(debug_assertions)]
-        self.owner.store(0, Ordering::Relaxed);
-    }
+    /// No-op kept for source compatibility — the cell no longer pins an
+    /// owner thread, so device switching needs no reset. Will be removed
+    /// once all callers have dropped their `reset_owner()` calls.
+    #[inline]
+    pub fn reset_owner(&self) {}
 
-    /// Returns a mutable reference to the contained value.
+    /// Borrow the cell mutably for the lifetime of the returned guard.
     ///
     /// # Panics (debug only)
-    /// Panics if called from a different thread than the first borrow.
+    /// Panics if another borrow is already live on a different thread.
     #[inline]
-    #[allow(clippy::mut_from_ref)]
     #[track_caller]
-    pub fn borrow_mut(&self) -> &mut T {
+    pub fn borrow_mut(&self) -> BorrowGuard<'_, T> {
         #[cfg(debug_assertions)]
-        self.assert_owner(std::panic::Location::caller());
-        // SAFETY: caller upholds single-thread access. Debug builds
-        // enforce it via the owner check above.
-        unsafe { &mut *self.inner.get() }
+        self.acquire(std::panic::Location::caller());
+        BorrowGuard { cell: self }
     }
 
-    /// Returns a shared reference to the contained value.
+    /// Borrow the cell shared for the lifetime of the returned guard.
+    ///
+    /// Note: the contract still allows only one borrow at a time, so
+    /// this is just a convenience for `&T` access — it does not enable
+    /// multiple concurrent readers.
     ///
     /// # Panics (debug only)
-    /// Panics if called from a different thread than the first borrow.
+    /// Panics if another borrow is already live on a different thread.
     #[inline]
     #[track_caller]
-    pub fn borrow(&self) -> &T {
+    pub fn borrow(&self) -> BorrowRef<'_, T> {
         #[cfg(debug_assertions)]
-        self.assert_owner(std::panic::Location::caller());
-        // SAFETY: same invariant as borrow_mut.
-        unsafe { &*self.inner.get() }
+        self.acquire(std::panic::Location::caller());
+        BorrowRef { cell: self }
     }
 
     #[cfg(debug_assertions)]
-    fn assert_owner(&self, caller: &std::panic::Location<'_>) {
-        let current = thread_id();
-        match self
-            .owner
-            .compare_exchange(0, current, Ordering::Relaxed, Ordering::Relaxed)
-        {
-            Ok(_) => {}
-            Err(existing) if existing == current => {}
-            Err(existing) => panic!(
-                "AudioThreadCell accessed from thread {current} but was first used from \
-                 thread {existing}. This cell must be used from a single thread.\n\
+    #[inline]
+    fn acquire(&self, caller: &std::panic::Location<'_>) {
+        if self.in_use.swap(true, Ordering::Acquire) {
+            panic!(
+                "AudioThreadCell concurrent borrow detected — another borrow is \
+                 already live. The contract is one borrow at a time.\n\
                  Call site: {caller}"
-            ),
+            );
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[inline]
+    fn release(&self) {
+        self.in_use.store(false, Ordering::Release);
     }
 }
 
-/// Stable numeric ID for the current thread (debug-only diagnostic).
-#[cfg(debug_assertions)]
-fn thread_id() -> u64 {
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    std::thread_local! {
-        static ID: u64 = COUNTER.fetch_add(1, Ordering::Relaxed);
+/// Mutable borrow guard returned by [`AudioThreadCell::borrow_mut`].
+pub struct BorrowGuard<'a, T> {
+    cell: &'a AudioThreadCell<T>,
+}
+
+impl<T> Deref for BorrowGuard<'_, T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        // SAFETY: caller upholds the single-borrow invariant; debug
+        // builds additionally enforce it via the `in_use` flag set in
+        // `acquire`.
+        unsafe { &*self.cell.inner.get() }
     }
-    ID.with(|id| *id)
+}
+
+impl<T> DerefMut for BorrowGuard<'_, T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as above; `&mut self` on the guard plus the in-use
+        // flag ensure no other borrow can observe this reference.
+        unsafe { &mut *self.cell.inner.get() }
+    }
+}
+
+impl<T> Drop for BorrowGuard<'_, T> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        self.cell.release();
+    }
+}
+
+/// Shared borrow guard returned by [`AudioThreadCell::borrow`].
+pub struct BorrowRef<'a, T> {
+    cell: &'a AudioThreadCell<T>,
+}
+
+impl<T> Deref for BorrowRef<'_, T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        // SAFETY: see `BorrowGuard::deref`.
+        unsafe { &*self.cell.inner.get() }
+    }
+}
+
+impl<T> Drop for BorrowRef<'_, T> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        self.cell.release();
+    }
 }
 
 // SAFETY: moving across threads is fine — it's concurrent access from
@@ -127,18 +174,48 @@ mod tests {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    fn borrow_from_another_thread_panics() {
+    fn sequential_borrows_across_threads_are_ok() {
+        // After one thread's borrow drops, another thread may borrow —
+        // that is the macOS CoreAudio scenario the old check tripped on.
         use std::sync::Arc;
         let cell = Arc::new(AudioThreadCell::new(0u32));
-        let _ = cell.borrow(); // prime owner on this thread
+        *cell.borrow_mut() = 7;
 
         let cell2 = Arc::clone(&cell);
-        let result = std::thread::spawn(move || {
-            let _ = cell2.borrow();
+        std::thread::spawn(move || {
+            *cell2.borrow_mut() = 9;
         })
-        .join();
+        .join()
+        .unwrap();
 
-        assert!(result.is_err(), "expected panic from wrong-thread access");
+        assert_eq!(*cell.borrow(), 9);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn concurrent_borrows_panic() {
+        use std::sync::{Arc, Barrier};
+        let cell = Arc::new(AudioThreadCell::new(0u32));
+        let barrier = Arc::new(Barrier::new(2));
+
+        let cell2 = Arc::clone(&cell);
+        let barrier2 = Arc::clone(&barrier);
+        let other = std::thread::spawn(move || {
+            let _g = cell2.borrow_mut();
+            barrier2.wait();
+            // Hold the guard while the main thread tries to borrow.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        });
+
+        barrier.wait();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = cell.borrow_mut();
+        }));
+
+        other.join().unwrap();
+        assert!(
+            result.is_err(),
+            "expected panic from concurrent borrow while another borrow was live"
+        );
     }
 }

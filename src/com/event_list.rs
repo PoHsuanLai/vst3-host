@@ -57,7 +57,7 @@ impl EventList {
     }
 
     pub fn update_from_midi(&self, midi_events: &[MidiEvent]) {
-        let inner = self.inner.borrow_mut();
+        let mut inner = self.inner.borrow_mut();
         inner.events.clear();
         inner.c_scratch_data.clear();
         inner
@@ -70,7 +70,7 @@ impl EventList {
         midi_events: &[MidiEvent],
         note_expressions: &[NoteExpressionValue],
     ) {
-        let inner = self.inner.borrow_mut();
+        let mut inner = self.inner.borrow_mut();
         inner.events.clear();
         inner.c_scratch_data.clear();
         inner
@@ -83,7 +83,7 @@ impl EventList {
     }
 
     pub fn clear(&self) {
-        let inner = self.inner.borrow_mut();
+        let mut inner = self.inner.borrow_mut();
         inner.events.clear();
         inner.c_scratch_data.clear();
     }
@@ -130,7 +130,7 @@ impl IEventListTrait for EventList {
         if e.is_null() {
             return kInvalidArgument;
         }
-        let inner = self.inner.borrow_mut();
+        let mut inner = self.inner.borrow_mut();
         if index < 0 || index >= inner.events.len() as i32 {
             return kInvalidArgument;
         }
@@ -138,7 +138,7 @@ impl IEventListTrait for EventList {
             events,
             c_scratch_data,
             ..
-        } = inner;
+        } = &mut *inner;
         let event = events[index as usize];
         *e = to_c_event(&event, c_scratch_data);
         kResultOk

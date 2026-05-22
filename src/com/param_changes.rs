@@ -61,7 +61,7 @@ impl ParameterChangesImpl {
     /// parameter queues as `changes.queues.len()`. The first few blocks
     /// may grow; stable-state automation is alloc-free.
     pub fn refill_from_changes(&self, changes: &ParameterChanges) {
-        let queues = self.queues.borrow_mut();
+        let mut queues = self.queues.borrow_mut();
         // Grow (off-the-hot-path) if needed.
         while queues.len() < changes.queues.len() {
             // Placeholder param_id — we immediately refill it below.
@@ -152,7 +152,7 @@ impl IParameterChangesTrait for ParameterChangesImpl {
             .as_com_ref::<IParamValueQueue>()
             .map(|r| r.as_ptr())
             .unwrap_or(std::ptr::null_mut());
-        let queues = self.queues.borrow_mut();
+        let mut queues = self.queues.borrow_mut();
         queues.push(new_queue);
         if !index.is_null() {
             *index = (queues.len() - 1) as i32;
