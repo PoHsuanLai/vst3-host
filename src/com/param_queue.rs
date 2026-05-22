@@ -68,10 +68,18 @@ impl ParamValueQueueImpl {
 
     pub fn to_queue(&self) -> ParameterQueue {
         let mut queue = ParameterQueue::new(self.param_id());
-        for point in self.points.borrow().iter() {
-            queue.add_point(point.sample_offset, point.value);
-        }
+        self.for_each_point(|p| {
+            queue.add_point(p.sample_offset, p.value);
+        });
         queue
+    }
+
+    /// Iterate over each `ParameterPoint` in this queue without exposing
+    /// the underlying `AudioThreadCell`. RT-safe.
+    pub fn for_each_point(&self, mut f: impl FnMut(&ParameterPoint)) {
+        for point in self.points.borrow().iter() {
+            f(point);
+        }
     }
 
     pub fn param_id(&self) -> u32 {

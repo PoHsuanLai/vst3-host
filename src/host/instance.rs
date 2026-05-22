@@ -25,7 +25,7 @@ use crate::com::{EventList, ParameterChangesImpl};
 use crate::error::{LoadStage, Result, Vst3Error};
 use crate::types::{
     AudioBuffer, BufferPtrs, MidiEvent, NoteExpressionValue, ParameterChanges, PluginInfo,
-    ProcessOutput, Sample, TransportState,
+    ProcessOutputRef, Sample, TransportState,
 };
 
 use super::loaded::{get_bus_channel_count, Vst3Loaded, K_INPUT, K_OUTPUT};
@@ -34,12 +34,10 @@ pub(super) const K_EVENT: i32 = kEvent as i32;
 const K_REALTIME: i32 = kRealtime as i32;
 const MIN_PTR_COUNT: usize = 2;
 
-fn empty_process_output() -> ProcessOutput {
-    ProcessOutput {
-        midi_events: SmallVec::new(),
-        parameter_changes: ParameterChanges::new(),
-    }
-}
+/// Pre-reserve capacity for output param-change queues. One slot per
+/// distinct param_id the plugin might emit in a single block; growing
+/// beyond this allocates once and then sticks.
+const OUTPUT_PARAM_QUEUE_RESERVE: usize = 32;
 
 /// Build an `AudioBusBuffers` from a channel count and a
 /// raw pointer-array (produced by [`Sample::prepare_ffi_buffers`]).
@@ -87,6 +85,10 @@ struct AudioIO {
     output_events: vst3::ComWrapper<EventList>,
     input_param_changes: vst3::ComWrapper<ParameterChangesImpl>,
     output_param_changes: vst3::ComWrapper<ParameterChangesImpl>,
+    /// Pooled return-value buffers. `process` writes converted events
+    /// into these so the call can return a borrowed view.
+    out_midi: SmallVec<[MidiEvent; 64]>,
+    out_param_changes: ParameterChanges,
 }
 
 /// Fully-active VST3 plugin ready to process audio.
@@ -137,6 +139,12 @@ impl Vst3Instance {
         let input_ptr_count = num_input_channels.max(MIN_PTR_COUNT);
         let output_ptr_count = num_output_channels.max(MIN_PTR_COUNT);
 
+        let mut out_param_changes = ParameterChanges::new();
+        // SmallVec doesn't expose a sized constructor for inline capacity;
+        // pre-reserve via grow_to_capacity-by-clear-after-push. Cheaper
+        // approach: just call reserve to pump heap capacity once.
+        out_param_changes.queues.reserve(OUTPUT_PARAM_QUEUE_RESERVE);
+
         let audio = AudioIO {
             sample_rate,
             block_size,
@@ -149,6 +157,8 @@ impl Vst3Instance {
             output_events: EventList::new(),
             input_param_changes: ParameterChangesImpl::new_empty(),
             output_param_changes: ParameterChangesImpl::new_empty(),
+            out_midi: SmallVec::new(),
+            out_param_changes,
         };
 
         let mut instance = Self { loaded, audio };
@@ -242,11 +252,24 @@ impl Vst3Instance {
         param_changes: Option<&ParameterChanges>,
         note_expressions: &[NoteExpressionValue],
         transport: &TransportState,
-    ) -> ProcessOutput {
-        let empty_result = empty_process_output();
+    ) -> ProcessOutputRef<'_> {
+        // Clear pooled return buffers up front so:
+        // 1. the bail-out paths below return a borrow into known-empty
+        //    state without separately constructing an empty owned output,
+        // 2. the steady-state path can `fill_*` into them with the
+        //    plugin's freshly-pushed events.
+        self.audio.out_midi.clear();
+        // Clear inline points without dropping heap capacity.
+        for queue in self.audio.out_param_changes.queues.iter_mut() {
+            queue.points.clear();
+        }
+        self.audio.out_param_changes.queues.clear();
 
         if !self.can_process::<T>() || buffer.num_samples == 0 {
-            return empty_result;
+            return ProcessOutputRef {
+                midi_events: &self.audio.out_midi,
+                parameter_changes: &self.audio.out_param_changes,
+            };
         }
         let processor = self.loaded.interfaces.processor.clone();
 
@@ -302,12 +325,25 @@ impl Vst3Instance {
 
         if result != kResultOk {
             buffer.clear_outputs();
-            return empty_result;
+            return ProcessOutputRef {
+                midi_events: &self.audio.out_midi,
+                parameter_changes: &self.audio.out_param_changes,
+            };
         }
 
-        ProcessOutput {
-            midi_events: self.audio.output_events.to_midi_events(),
-            parameter_changes: self.audio.output_param_changes.to_changes(),
+        // Drain the plugin's emitted events into the pooled return
+        // buffers. Both `fill_*` clear their destination first and
+        // reuse the destination's heap capacity.
+        self.audio
+            .output_events
+            .fill_midi_events(&mut self.audio.out_midi);
+        self.audio
+            .output_param_changes
+            .fill_changes(&mut self.audio.out_param_changes);
+
+        ProcessOutputRef {
+            midi_events: &self.audio.out_midi,
+            parameter_changes: &self.audio.out_param_changes,
         }
     }
 

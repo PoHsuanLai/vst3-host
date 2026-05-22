@@ -96,13 +96,28 @@ impl ParameterChangesImpl {
 
     pub fn to_changes(&self) -> ParameterChanges {
         let mut changes = ParameterChanges::new();
-        for queue in self.queues.borrow().iter() {
-            let q = queue.to_queue();
-            for point in &q.points {
-                changes.add_change(q.param_id, point.sample_offset, point.value);
-            }
-        }
+        self.fill_changes(&mut changes);
         changes
+    }
+
+    /// RT-safe variant of [`Self::to_changes`] that drains into a
+    /// caller-supplied pooled `ParameterChanges`. Clears `out.queues`
+    /// first; reuses any per-queue inline `points` storage on the
+    /// destination side.
+    pub fn fill_changes(&self, out: &mut ParameterChanges) {
+        // Clear `out`'s queues — each individual queue's `points`
+        // SmallVec keeps its heap capacity (clear is len=0, no realloc).
+        for queue in out.queues.iter_mut() {
+            queue.points.clear();
+        }
+        out.queues.clear();
+
+        for queue in self.queues.borrow().iter() {
+            let param_id = queue.param_id();
+            queue.for_each_point(|point| {
+                out.add_change(param_id, point.sample_offset, point.value);
+            });
+        }
     }
 
     pub fn len(&self) -> usize {

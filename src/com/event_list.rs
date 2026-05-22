@@ -114,6 +114,28 @@ impl EventList {
             .collect()
     }
 
+    /// RT-safe variant of [`Self::to_midi_events`] that drains into a
+    /// caller-supplied pooled `SmallVec`. Clears `out` first; reuses
+    /// existing heap capacity.
+    pub fn fill_midi_events(&self, out: &mut SmallVec<[MidiEvent; 64]>) {
+        out.clear();
+        for event in self.inner.borrow().events.iter() {
+            if let Some(midi) = vst3_to_midi_event(event) {
+                out.push(midi);
+            }
+        }
+    }
+
+    /// RT-safe variant of [`Self::to_note_expressions`].
+    pub fn fill_note_expressions(&self, out: &mut SmallVec<[NoteExpressionValue; 16]>) {
+        out.clear();
+        for event in self.inner.borrow().events.iter() {
+            if let Some(expr) = vst3_to_note_expression(event) {
+                out.push(expr);
+            }
+        }
+    }
+
     /// Reset the audio-thread owner. Call when the host switches to a new
     /// audio stream (the next `process` call will re-claim ownership).
     pub fn reset_owner(&self) {
